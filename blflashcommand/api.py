@@ -59,6 +59,7 @@ class ReadResult:
     address: int
     data: bytes
     log: str
+    probe: Optional[ProbeResult] = None
 
 
 @dataclass(frozen=True)
@@ -176,17 +177,25 @@ def probe_uart(*, chip: str, port: str, baudrate: Optional[int] = None,
 
 
 def read_flash_uart(address: int, length: int, *, chip: str, port: str,
-                    baudrate: Optional[int] = None, timeout: float = 600) -> ReadResult:
+                    baudrate: Optional[int] = None, include_probe: bool = False,
+                    timeout: float = 600) -> ReadResult:
     """Read exactly length bytes from address using bounded transport chunks.
 
+    include_probe=True captures JEDEC/MAC/boot evidence on the same UART session
+    before reading; ReadResult.probe holds that evidence. No port reopen or reset
+    occurs between probing and reading. The default leaves probe as None.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
     """
     _integer(address, 'address')
     _integer(length, 'length', 1)
+    if not isinstance(include_probe, bool):
+        raise ValueError('include_probe must be a boolean')
     if address + length > 0x100000000:
         raise ValueError('Read extends beyond the 32-bit flash address range')
-    result = _request('read', chip, port, baudrate, timeout, address=address, length=length)
-    return ReadResult(address, result['data'], result['log'])
+    result = _request('read', chip, port, baudrate, timeout, address=address,
+                      length=length, include_probe=include_probe)
+    probe = ProbeResult(log=result['log'], **result['probe']) if include_probe else None
+    return ReadResult(address, result['data'], result['log'], probe)
 
 
 def reset_uart(*, chip: str, port: str, baudrate: int = 500000,

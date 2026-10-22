@@ -1952,15 +1952,20 @@ class BaseEflashLoader(object):
         isp_sh_time = self.get_isp_sh_time()
         if self.interface.lower() == 'uart':
             self.bflb_serial_object.repeat_init(self.device, self.speed, self.chip_type, self.chip_name)
-            if self._bflb_com_img_loader.toggle_boot_or_shake_hand(2, do_reset=False,
-              reset_hold_time=100,
-              shake_hand_delay=100,
-              reset_revert=True,
-              cutoff_time=0,
-              isp_mode_sign=(self.isp_mode_sign),
-              isp_timeout=isp_sh_time,
-              boot_load=False,
-              shake_hand_retry=2) != 'OK':
+            if self.chip_type == 'bl602' and not self.isp_mode_sign:
+                # This is the active helper, so even a DTR-only toggle can lose it.
+                status = self._bflb_com_img_loader._sync_without_reset(self.speed)
+            else:
+                status = self._bflb_com_img_loader.toggle_boot_or_shake_hand(2, do_reset=False,
+                  reset_hold_time=100,
+                  shake_hand_delay=100,
+                  reset_revert=True,
+                  cutoff_time=0,
+                  isp_mode_sign=(self.isp_mode_sign),
+                  isp_timeout=isp_sh_time,
+                  boot_load=False,
+                  shake_hand_retry=2)
+            if status != 'OK':
                 self.error_code_print('0001')
                 return False
         else:

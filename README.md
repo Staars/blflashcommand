@@ -72,8 +72,10 @@ ranges, then optional reset. Incomplete or mismatched readback raises `FlashErro
 and prevents reset. Input files remain unchanged. Verification uses the requested
 image bytes, so backend image patching that changes those bytes causes a mismatch.
 
-`read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log)`
-with raw `bytes`, using bounded reads and rejecting incomplete responses.
+`read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log, probe)`
+with raw `bytes`, using bounded reads and rejecting incomplete responses. Set
+`include_probe=True` to capture JEDEC/MAC/boot evidence in `result.probe` before
+reading on that same UART session. It defaults to `False`, with `probe=None`.
 
 `probe_uart` returns `ProbeResult(chip, backend, boot_info, mac_address, jedec_id,
 jedec_response, log)`. Hexadecimal evidence is returned as strings. `chip` is the
@@ -88,8 +90,11 @@ configure flash, without programming flash or efuses.
 
 The Python API defaults to 500 kbaud for BL602 and 2 Mbaud for other profiles;
 reset defaults to 500 kbaud. Pass an explicit baud rate for the target board.
-A firmware console's baud rate is independent of the flashing baud rate. Invalid
-arguments raise `ValueError`, `TypeError` or a filesystem exception before serial access;
+A firmware console's baud rate is independent of the flashing baud rate. BL602
+first tries UART sync without changing RTS/DTR, allowing consecutive operations to
+reuse an already running loader. If it does not answer, initialization falls back
+to the configured reset sequence. Invalid arguments raise `ValueError`, `TypeError`
+or a filesystem exception before serial access;
 operation failures and timeouts raise `FlashError` with captured output in `log`.
 
 Importing `blflashcommand` opens no port and imports no legacy transport modules.

@@ -72,6 +72,16 @@ def _hex(value):
     return bytes(value).hex()
 
 
+def _probe_info(loader, chip, backend):
+    """Capture chip/flash evidence on the caller's active loader session."""
+    result, response = loader.flash_read_jedec_id_process()
+    if result is not True or response is None or len(response) < 3:
+        raise RuntimeError('JEDEC probe failed')
+    return dict(chip=chip, backend=backend, boot_info=_hex(loader.bootinfo),
+                mac_address=bytes(loader._mac_addr).hex(),
+                jedec_id=bytes(response[:3]).hex(), jedec_response=bytes(response).hex())
+
+
 def _read_chunks(loader, address, length):
     """Bound calls to the inherited helper and reject incomplete responses."""
     maximum = loader._bflb_com_tx_size - 8
@@ -150,17 +160,15 @@ def _operation(request, workspace):
                     raise RuntimeError('Flash succeeded but loader CPU reset was not acknowledged')
             return {}
         if operation == 'probe':
-            result, response = loader.flash_read_jedec_id_process()
-            if result is not True or response is None or len(response) < 3:
-                raise RuntimeError('JEDEC probe failed')
-            return dict(chip=request['chip'], backend=config['param']['chip_type'],
-                        boot_info=_hex(loader.bootinfo), mac_address=bytes(loader._mac_addr).hex(),
-                        jedec_id=bytes(response[:3]).hex(), jedec_response=bytes(response).hex())
+            return _probe_info(loader, request['chip'], config['param']['chip_type'])
         if operation == 'read':
+            evidence = {}
+            if request.get('include_probe', False):
+                evidence['probe'] = _probe_info(loader, request['chip'], config['param']['chip_type'])
             with (workspace.parent / 'read.bin').open('wb') as output:
                 for data in _read_chunks(loader, request['address'], request['length']):
                     output.write(data)
-            return {}
+            return evidence
         raise ValueError('Unknown operation: ' + operation)
     finally:
         loader.close_serial()

@@ -610,6 +610,24 @@ class BflbImgLoader(object):
         else:
             return 'FL'
 
+    def _sync_without_reset(self, speed):
+        """Contact a prepared BL602 ROM/RAM loader without changing RTS/DTR."""
+        uart = self.bflb_serial_object
+        timeout = uart.get_timeout()
+        try:
+            bflb_utils.printf('Try sync without changing RTS/DTR')
+            uart.set_timeout(0.1)
+            uart.clear_buf()
+            uart.write(self.get_sync_bytes(max(1, int(0.006 * speed / 10))))
+            _, ack = uart.read(1000)
+            bflb_utils.printf('ack is ', binascii.hexlify(ack))
+            if b'O' in ack or b'K' in ack:
+                time.sleep(0.03)
+                return 'OK'
+            return 'FL'
+        finally:
+            uart.set_timeout(timeout)
+
     def img_load_shake_hand(self, sh_baudrate, wk_baudrate, do_reset=False, reset_hold_time=100, shake_hand_delay=100, reset_revert=True, cutoff_time=0, shake_hand_retry=2, isp_mode_sign=False, isp_timeout=0, boot_load=True):
         self.bflb_serial_object.repeat_init(self._device, sh_baudrate, self._chip_type, self._chip_name)
         self.boot_install_cmds_callback()
@@ -628,7 +646,13 @@ class BflbImgLoader(object):
         else:
             if self._chip_type == 'bl602':
                 self._602a0_dln_fix = False
-            ret = self.toggle_boot_or_shake_hand(2, do_reset, reset_hold_time, shake_hand_delay, reset_revert, cutoff_time, isp_mode_sign, isp_timeout, boot_load, shake_hand_retry)
+            # A previous API/CLI operation may have left the helper running.
+            # Resetting first destroys that session and may boot the application.
+            ret = 'FL'
+            if self._chip_type == 'bl602' and not isp_mode_sign:
+                ret = self._sync_without_reset(sh_baudrate)
+            if ret != 'OK':
+                ret = self.toggle_boot_or_shake_hand(2, do_reset, reset_hold_time, shake_hand_delay, reset_revert, cutoff_time, isp_mode_sign, isp_timeout, boot_load, shake_hand_retry)
             if self._chip_type == 'bl602':
                 self._602a0_dln_fix = False
             if ret != 'OK':
