@@ -123,18 +123,22 @@ def _request(operation, chip, port, baudrate, timeout, **fields):
 
 
 def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
-               baudrate: Optional[int] = None, erase: bool = True,
+               baudrate: Optional[int] = None, erase: bool = True, verify: bool = False,
                reset_after: bool = False, timeout: float = 1800) -> FlashResult:
     """Flash nonempty, nonoverlapping images through the selected UART profile.
 
     erase=True erases programmed regions using the existing loader. False assumes
     the caller has already erased them. No efuse writes or crypto are enabled.
+    verify=True compares each input image's SHA-256 with bounded readback in
+    the same loader session, before any requested reset. Input files stay unchanged.
     reset_after=True requests CPU reset in the same successful loader session
     and requires its acknowledgement; application boot is not verified.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
     """
     if not isinstance(erase, bool):
         raise ValueError('erase must be a boolean')
+    if not isinstance(verify, bool):
+        raise ValueError('verify must be a boolean')
     if not isinstance(reset_after, bool):
         raise ValueError('reset_after must be a boolean')
     entries = []
@@ -155,7 +159,7 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     if any(current['end'] > following['address'] for current, following in zip(entries, entries[1:])):
         raise ValueError('Flash image ranges overlap')
     result = _request('flash', chip, port, baudrate, timeout, images=entries,
-                      erase=erase, reset_after=reset_after)
+                      erase=erase, verify=verify, reset_after=reset_after)
     return FlashResult(result['log'])
 
 

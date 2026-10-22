@@ -50,7 +50,9 @@ try:
     with open("backup.bin", "wb") as output:
         output.write(backup.data)
     # Set offsets for the actual board/image layout before flashing.
-    written = flash_uart([FlashImage("factory.bin", 0)], reset_after=True, **options)
+    written = flash_uart(
+        [FlashImage("factory.bin", 0)], verify=True, reset_after=True, **options,
+    )
 except FlashError as error:
     print(error, error.log)
 ```
@@ -62,6 +64,14 @@ returns `FlashResult(log)`. Its `erase=True` default erases programmed regions;
 set it to `True` to request CPU reset before closing the successful flash session.
 The existing loader reset command must acknowledge the request; application boot
 is not verified.
+
+`verify=False` is the default. With `verify=True`, each image's SHA-256 is captured
+from its private input copy before writing and compared with bounded flash reads
+on that same active loader session. The order is write, verify all requested image
+ranges, then optional reset. Incomplete or mismatched readback raises `FlashError`
+and prevents reset. Input files remain unchanged. Verification uses the requested
+image bytes, so backend image patching that changes those bytes causes a mismatch.
+
 `read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log)`
 with raw `bytes`, using bounded reads and rejecting incomplete responses.
 

@@ -1,5 +1,6 @@
 """Private subprocess bridge to the legacy implementation; not a public API."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -71,6 +72,37 @@ def _hex(value):
     return bytes(value).hex()
 
 
+def _read_chunks(loader, address, length):
+    """Bound calls to the inherited helper and reject incomplete responses."""
+    maximum = loader._bflb_com_tx_size - 8
+    if maximum <= 0:
+        raise RuntimeError('Invalid loader read payload size')
+    while length:
+        count = min(length, maximum)
+        result, data = loader.flash_read_main_process(address, count)
+        if result is not True or data is None or len(data) != count:
+            raise RuntimeError(f'Incomplete flash read at {address:#x}')
+        yield data
+        address += count
+        length -= count
+
+
+def _expected_images(config):
+    """Hash the requested copies before the backend can patch staged images."""
+    images = []
+    for value in config.values():
+        if not isinstance(value, dict) or 'addr' not in value or 'path' not in value:
+            continue
+        digest = hashlib.sha256()
+        length = 0
+        with open(value['path'], 'rb') as image:
+            for data in iter(lambda: image.read(1024 * 1024), b''):
+                digest.update(data)
+                length += len(data)
+        images.append((int(value['addr'], 16), length, digest.digest()))
+    return images
+
+
 def _operation(request, workspace):
     from libs.bflb_interface_eflash_loader import create_eflash_loader
     from libs.bflb_utils import clear_global, eflash_loader_parser_init, hexstr_to_bytearray
@@ -98,10 +130,17 @@ def _operation(request, workspace):
     args = eflash_loader_parser_init().parse_args(options)
     loader = create_eflash_loader(config['param']['chip_type'], args, config)
     try:
+        expected = _expected_images(config) if operation == 'flash' and request.get('verify', False) else []
         result, detail = loader.run_step()
         if result is not True:
             raise RuntimeError(f'Loader initialization or operation failed: {detail}')
         if operation == 'flash':
+            for address, length, expected_digest in expected:
+                digest = hashlib.sha256()
+                for data in _read_chunks(loader, address, length):
+                    digest.update(data)
+                if digest.digest() != expected_digest:
+                    raise RuntimeError(f'Flash readback differs from requested image at {address:#x}')
             if request.get('reset_after', False):
                 # Use the same reset opcode/path as the existing chip loaders,
                 # while this UART session still owns the running RAM/ROM loader.
@@ -118,22 +157,9 @@ def _operation(request, workspace):
                         boot_info=_hex(loader.bootinfo), mac_address=bytes(loader._mac_addr).hex(),
                         jedec_id=bytes(response[:3]).hex(), jedec_response=bytes(response).hex())
         if operation == 'read':
-            # The inherited helper only advances when a call fits its payload.
-            # Bound every call here and reject partial reads explicitly.
-            maximum = loader._bflb_com_tx_size - 8
-            if maximum <= 0:
-                raise RuntimeError('Invalid loader read payload size')
-            remaining = request['length']
-            address = request['address']
             with (workspace.parent / 'read.bin').open('wb') as output:
-                while remaining:
-                    length = min(remaining, maximum)
-                    result, data = loader.flash_read_main_process(address, length)
-                    if result is not True or data is None or len(data) != length:
-                        raise RuntimeError(f'Incomplete flash read at {address:#x}')
+                for data in _read_chunks(loader, request['address'], request['length']):
                     output.write(data)
-                    address += length
-                    remaining -= length
             return {}
         raise ValueError('Unknown operation: ' + operation)
     finally:
