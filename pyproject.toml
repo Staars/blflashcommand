@@ -1,8 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "blflashcommand"
 version = "0.1.0"
 description = "Command-line Bouffalo Lab flash utility"
 requires-python = ">=3.9"
+readme = "README.md"
+license = "Apache-2.0"
 dependencies = [
     "pyserial==3.5",
 ]
@@ -16,4 +22,29 @@ xts = ["pycryptoplus==0.0.1"]
 openocd = ["telnetlib-313-and-up==3.13.1; python_version >= '3.13'"]
 
 [tool.uv]
-package = false
+package = true
+
+[project.scripts]
+blflashcommand = "blflashcommand.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+packages = [
+    "blflashcommand", "blflashcommand._legacy", "blflashcommand._legacy.libs",
+    "blflashcommand._legacy.libs.base", "blflashcommand._legacy.libs.base.bl602",
+    "blflashcommand._legacy.libs.base.bl702", "blflashcommand._legacy.libs.base.bl702l",
+    "blflashcommand._legacy.libs.base.bl808", "blflashcommand._legacy.libs.base.bl616",
+    "blflashcommand._legacy.libs.base.wb03",
+]
+
+[tool.setuptools.package-dir]
+"blflashcommand._legacy" = "."
+
+[tool.setuptools.package-data]
+"blflashcommand._legacy" = [
+    "flash_prog_cfg.ini.example",
+    "chips/*/eflash_loader/*.conf",
+    "chips/*/eflash_loader/eflash_loader_*m.bin",
+    "chips/*/efuse_bootheader/*.conf",
+    "utils/flash/*/*.conf", "utils/flash/*/*.csv",
+]

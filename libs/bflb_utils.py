@@ -26,7 +26,9 @@ try:
     from serial.tools.list_ports import comports
 except ImportError:
     pass
-if getattr(sys, 'frozen', False):
+if os.environ.get('BLFLASHCOMMAND_WORKSPACE'):
+    app_path = os.path.abspath(os.environ['BLFLASHCOMMAND_WORKSPACE'])
+elif getattr(sys, 'frozen', False):
     app_path = os.path.dirname(sys.executable)
 else:
     app_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

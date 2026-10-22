@@ -348,65 +348,67 @@ class BaseEflashLoader(object):
             result, address, flash_file = self.get_flash_file_and_address()
             if not result:
                 return (False, self.flash_burn_retry)
-            temp_file_list = []
-            for one in flash_file:
-                if os.path.join(chip_path, self.chip_name) in one:
-                    temp_file_list.append(one.replace(app_path, '')[1:])
-                else:
-                    temp_file_list.append(os.path.join('chips', self.chip_name, 'img_create', os.path.basename(one)))
+            # Probe/read initialization needs no image staging or flash package.
+            if not self.args.none:
+                temp_file_list = []
+                for one in flash_file:
+                    if os.path.join(chip_path, self.chip_name) in one:
+                        temp_file_list.append(one.replace(app_path, '')[1:])
+                    else:
+                        temp_file_list.append(os.path.join('chips', self.chip_name, 'img_create', os.path.basename(one)))
 
-            if 'erase' in self.config['param']:
-                if self.config['param']['erase']:
-                    update_cfg(self.cfg, 'LOAD_CFG', 'erase', str(self.erase))
-            if 'skip_mode' in self.config['param']:
-                if self.config['param']['skip_mode']:
-                    update_cfg(self.cfg, 'LOAD_CFG', 'skip_mode', self.config['param']['skip_mode'])
-            if 'boot2_isp_mode' in self.config['param']:
-                if self.config['param']['boot2_isp_mode']:
-                    update_cfg(self.cfg, 'LOAD_CFG', 'boot2_isp_mode', self.config['param']['boot2_isp_mode'])
-            update_cfg(self.cfg, 'FLASH_CFG', 'file', ' '.join(temp_file_list))
-            update_cfg(self.cfg, 'FLASH_CFG', 'address', ' '.join(address))
-            self.cfg.write(self.config_file, 'w+')
-            with open((self.config_file), 'r', encoding='utf-8') as cf_file:
-                cf_context = cf_file.read().replace('"', '')
-            with open((self.config_file), 'w', encoding='utf-8') as cf_file:
-                cf_file.write(cf_context)
-            self.bl_write_flash_img(address, flash_file)
-            self.address_list = address[:]
-            self.flash_file_list = flash_file[:]
-            if self.args.efuse:
-                try:
-                    if self.config['input_path']['efuse']:
-                        if self.config['check_box']['efuse']:
-                            efusefile = self.config['input_path']['efuse']
-                except:
-                    efusefile = ''
+                if 'erase' in self.config['param']:
+                    if self.config['param']['erase']:
+                        update_cfg(self.cfg, 'LOAD_CFG', 'erase', str(self.erase))
+                if 'skip_mode' in self.config['param']:
+                    if self.config['param']['skip_mode']:
+                        update_cfg(self.cfg, 'LOAD_CFG', 'skip_mode', self.config['param']['skip_mode'])
+                if 'boot2_isp_mode' in self.config['param']:
+                    if self.config['param']['boot2_isp_mode']:
+                        update_cfg(self.cfg, 'LOAD_CFG', 'boot2_isp_mode', self.config['param']['boot2_isp_mode'])
+                update_cfg(self.cfg, 'FLASH_CFG', 'file', ' '.join(temp_file_list))
+                update_cfg(self.cfg, 'FLASH_CFG', 'address', ' '.join(address))
+                self.cfg.write(self.config_file, 'w+')
+                with open((self.config_file), 'r', encoding='utf-8') as cf_file:
+                    cf_context = cf_file.read().replace('"', '')
+                with open((self.config_file), 'w', encoding='utf-8') as cf_file:
+                    cf_file.write(cf_context)
+                self.bl_write_flash_img(address, flash_file)
+                self.address_list = address[:]
+                self.flash_file_list = flash_file[:]
+                if self.args.efuse:
+                    try:
+                        if self.config['input_path']['efuse']:
+                            if self.config['check_box']['efuse']:
+                                efusefile = self.config['input_path']['efuse']
+                    except:
+                        efusefile = ''
 
-                if efusefile:
-                    efuse_file = efusefile
-                    mask_file = efuse_file.replace('.bin', '_mask.bin')
-                    relpath_efuse_file = os.path.relpath(os.path.join('chips', self.chip_name, 'img_create', os.path.basename(efuse_file)))
-                    relpath_mask_file = os.path.relpath(os.path.join('chips', self.chip_name, 'img_create', os.path.basename(mask_file)))
-                    if self.cfg.has_option('EFUSE_CFG', 'file'):
-                        update_cfg(self.cfg, 'EFUSE_CFG', 'file', relpath_efuse_file)
-                        update_cfg(self.cfg, 'EFUSE_CFG', 'maskfile', relpath_mask_file)
-                        self.cfg.write(self.config_file, 'w+')
-                        with open((self.config_file), 'r', encoding='utf-8') as cf_file:
-                            cf_context = cf_file.read().replace('"', '')
-                        with open((self.config_file), 'w', encoding='utf-8') as cf_file:
-                            cf_file.write(cf_context)
+                    if efusefile:
+                        efuse_file = efusefile
+                        mask_file = efuse_file.replace('.bin', '_mask.bin')
+                        relpath_efuse_file = os.path.relpath(os.path.join('chips', self.chip_name, 'img_create', os.path.basename(efuse_file)))
+                        relpath_mask_file = os.path.relpath(os.path.join('chips', self.chip_name, 'img_create', os.path.basename(mask_file)))
+                        if self.cfg.has_option('EFUSE_CFG', 'file'):
+                            update_cfg(self.cfg, 'EFUSE_CFG', 'file', relpath_efuse_file)
+                            update_cfg(self.cfg, 'EFUSE_CFG', 'maskfile', relpath_mask_file)
+                            self.cfg.write(self.config_file, 'w+')
+                            with open((self.config_file), 'r', encoding='utf-8') as cf_file:
+                                cf_context = cf_file.read().replace('"', '')
+                            with open((self.config_file), 'w', encoding='utf-8') as cf_file:
+                                cf_file.write(cf_context)
+                    else:
+                        efuse_file = self.cfg.get('EFUSE_CFG', 'file')
+                        mask_file = self.cfg.get('EFUSE_CFG', 'maskfile')
+                    if self.temp_task_num != None:
+                        efuse_file = 'task' + str(self.temp_task_num) + '/' + efuse_file
+                    ret = img_create.compress_dir(self.chip_name, 'img_create', self.args.efuse, address, flash_file, efuse_file, mask_file)
+                    if ret is not True:
+                        return (False, errorcode_msg())
                 else:
-                    efuse_file = self.cfg.get('EFUSE_CFG', 'file')
-                    mask_file = self.cfg.get('EFUSE_CFG', 'maskfile')
-                if self.temp_task_num != None:
-                    efuse_file = 'task' + str(self.temp_task_num) + '/' + efuse_file
-                ret = img_create.compress_dir(self.chip_name, 'img_create', self.args.efuse, address, flash_file, efuse_file, mask_file)
-                if ret is not True:
-                    return (False, errorcode_msg())
-            else:
-                ret = img_create.compress_dir(self.chip_name, 'img_create', False, address, flash_file)
-                if ret is not True:
-                    return (False, errorcode_msg())
+                    ret = img_create.compress_dir(self.chip_name, 'img_create', False, address, flash_file)
+                    if ret is not True:
+                        return (False, errorcode_msg())
             if self.interface == 'uart' or self.interface == 'sdio':
                 if temp_speed:
                     self.speed = temp_speed

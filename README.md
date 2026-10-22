@@ -29,6 +29,67 @@ For pip, create and activate a virtual environment, then install
 The required dependency is `pyserial==3.5`; `uv.lock` also records the optional
 packages listed below.
 
+## Installable package and Python API
+
+Install this project with `python -m pip install .` or `uv pip install .`.
+The installed `blflashcommand` command and `python -m blflashcommand` accept the
+same arguments as `python BLFlashCommand.py`; the source script remains available.
+Wheels and source distributions include the UART loader binaries and configuration
+templates, excluding generated images, live INI files and local firmware artifacts.
+
+```python
+from blflashcommand import (
+    FlashError, FlashImage, flash_uart, probe_uart, read_flash_uart, reset_uart,
+)
+
+options = dict(chip="bl602", port="/dev/ttyUSB0", baudrate=500000)
+try:
+    info = probe_uart(**options)
+    print(info.jedec_id, info.mac_address)
+    backup = read_flash_uart(0, 0x200000, **options)
+    with open("backup.bin", "wb") as output:
+        output.write(backup.data)
+    # Set offsets for the actual board/image layout before flashing.
+    written = flash_uart([FlashImage("factory.bin", 0)], reset_after=True, **options)
+except FlashError as error:
+    print(error, error.log)
+```
+
+All operations are synchronous and accept `chip`, `port`, `baudrate` and a timeout
+in seconds. `flash_uart` accepts one or more nonempty, nonoverlapping images and
+returns `FlashResult(log)`. Its `erase=True` default erases programmed regions;
+`erase=False` assumes they were already erased. `reset_after=False` is the default;
+set it to `True` to request CPU reset before closing the successful flash session.
+The existing loader reset command must acknowledge the request; application boot
+is not verified.
+`read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log)`
+with raw `bytes`, using bounded reads and rejecting incomplete responses.
+
+`probe_uart` returns `ProbeResult(chip, backend, boot_info, mac_address, jedec_id,
+jedec_response, log)`. Hexadecimal evidence is returned as strings. `chip` is the
+requested profile, not an autodetected identity; the API does not distinguish
+BL616 from BL618 from their shared protocol. `reset_uart` uses the existing ROM
+reset command and returns `ResetResult(log)` after acknowledgement. It requires
+a reachable download-mode ROM and suitable boot straps; application boot is not
+verified. It is a ROM-only operation; use `flash_uart(reset_after=True)` to reset
+from the active RAM/ROM loader session after writing. Probe/read can reset into
+download mode, load a helper into RAM and
+configure flash, without programming flash or efuses.
+
+The Python API defaults to 500 kbaud for BL602 and 2 Mbaud for other profiles;
+reset defaults to 500 kbaud. Pass an explicit baud rate for the target board.
+A firmware console's baud rate is independent of the flashing baud rate. Invalid
+arguments raise `ValueError`, `TypeError` or a filesystem exception before serial access;
+operation failures and timeouts raise `FlashError` with captured output in `log`.
+
+Importing `blflashcommand` opens no port and imports no legacy transport modules.
+Each operation runs in a private subprocess and temporary workspace so the
+legacy backend can modify its own configs and image copies without changing
+caller files or the installed package. Do not run simultaneous operations on
+the same serial device. The public API currently covers unencrypted UART
+operations; crypto and debug probe transport options remain available through the CLI.
+This packaging/API has no new hardware qualification; the evidence below applies.
+
 ## Chip selection and evidence
 
 Chip names are case-insensitive. The requested name identifies firmware files;

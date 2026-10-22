@@ -5,3 +5,7 @@ log/
 *.bin
 *.ini
 whole_img.pack
+build/
+dist/
+*.egg-info/
+.venv/
