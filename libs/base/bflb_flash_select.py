@@ -95,12 +95,10 @@ def flash_bootheader_config_check(chiptype, flashid, file, parafile):
                     data[2:4] = rdata[i + 14:i + 16]
                 flashCfg = rdata[i + offset:i + offset + flashCfgLen]
                 if data != None:
-                    if not data != flashCfg and flashCfg[13:14] != b'\xff' or flashCfg[13:14] != b'\x00':
+                    if data != flashCfg and flashCfg[13:14] not in (b'\xff', b'\x00'):
                         return False
-                else:
-                    if flashCfg[13:14] != b'\xff':
-                        if flashCfg[13:14] != b'\x00':
-                            return False
+                elif flashCfg[13:14] not in (b'\xff', b'\x00'):
+                    return False
         i += 4
 
     return True

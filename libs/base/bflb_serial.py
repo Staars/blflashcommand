@@ -4,7 +4,8 @@
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/base/bflb_serial.py
 __doc__ = '\nCreated on 20220830\n\n@author: Dillon\n'
-import re, os, sys, time, serial, struct, pylink, cklink, subprocess
+from libs.bflb_optional import require_dependency
+import re, os, sys, time, serial, struct, subprocess
 from glob import glob
 from libs.bflb_utils import *
 from serial.tools.list_ports import comports
@@ -99,32 +100,14 @@ class BLSerialUart(object):
             self._ser.close()
 
     def _is_bouffalo_chip(self):
-        bl_sign = False
-        if sys.platform.startswith('win'):
-            for port, data, info in comports():
-                if not port:
-                    continue
-                if self._device.upper() == port.upper():
-                    if not 'VID:PID=42BF:B210' in info.upper():
-                        if 'VID:PID=FFFF:FFFF' in info.upper():
-                            pass
-                    bl_sign = True
-                    break
-
-        else:
-            if sys.platform.startswith('linux') or sys.platform.startswith('darwin'):
-                ports = []
-                for port, data, info in comports():
-                    if not port:
-                        continue
-                    if self._device.upper() == port.upper():
-                        if not 'PID=FFFF' in info.upper():
-                            if 'PID=42BF:B210' in info.upper():
-                                pass
-                        bl_sign = True
-                        break
-
-        return bl_sign
+        for port, data, info in comports():
+            if not port:
+                continue
+            if self._device.upper() != port.upper():
+                continue
+            hwid = (info or '').upper()
+            return 'VID:PID=42BF:B210' in hwid or 'FACTORYAIOT' in hwid
+        return False
 
     def bl_usb_serial_write(self, cutoff_time, reset_revert):
         try:
@@ -315,6 +298,7 @@ class BLSerialUart(object):
 class BLSerialJLink(object):
 
     def __init__(self, device, speed, jlink_shake_hand_addr, jlink_data_addr, jlink_set_tif, jlink_core_type, jlink_run_addr):
+        pylink = require_dependency("pylink", "pylink-square", "J-Link transport")
         self.device = device
         self.speed = speed
         self.jlink_shake_hand_addr = jlink_shake_hand_addr
@@ -565,6 +549,7 @@ class BLSerialCKLink(object):
         self.temp_init()
 
     def temp_init(self):
+        cklink = require_dependency("cklink", "pycklink", "CKLink transport")
         if self._inited is False:
             dev = self.device.split('|')
             vid = int(dev[0].replace('0x', ''), 16)

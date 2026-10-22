@@ -4,7 +4,8 @@
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/base/bflb_base_eflash_loader.py
 __doc__ = '\nCreated on 20220908\n\n@author: Dillon\n'
-import os, lzma, ecdsa, config as gol
+from libs.bflb_optional import require_dependency
+import os, lzma, config as gol
 from libs.bflb_utils import *
 from libs.bflb_configobj import BFConfigParser
 from libs import bflb_ecdh
@@ -401,11 +402,11 @@ class BaseEflashLoader(object):
                     efuse_file = 'task' + str(self.temp_task_num) + '/' + efuse_file
                 ret = img_create.compress_dir(self.chip_name, 'img_create', self.args.efuse, address, flash_file, efuse_file, mask_file)
                 if ret is not True:
-                    return errorcode_msg()
+                    return (False, errorcode_msg())
             else:
                 ret = img_create.compress_dir(self.chip_name, 'img_create', False, address, flash_file)
                 if ret is not True:
-                    return errorcode_msg()
+                    return (False, errorcode_msg())
             if self.interface == 'uart' or self.interface == 'sdio':
                 if temp_speed:
                     self.speed = temp_speed
@@ -499,7 +500,8 @@ class BaseEflashLoader(object):
                             return (
                              False, self.flash_burn_retry)
                         load_bin_pass = True
-                        time.sleep(4.5)
+                        self._need_shake_hand = False
+                        printf('Reusing the eflash loader already running on the target')
                     if ret is False:
                         if load_bin_pass == False:
                             self.error_code_print('0003')
@@ -2016,6 +2018,7 @@ class BaseEflashLoader(object):
         return ''
 
     def get_ecdh_shared_key(self, shakehand=0):
+        ecdsa = require_dependency("ecdsa", "ecdsa", "ECDH authentication")
         printf('========= get ecdh shared key =========')
         publickey_file = 'utils/pem/publickey_uecc.pem'
         if shakehand != 0:
@@ -2074,11 +2077,13 @@ class BaseEflashLoader(object):
             return False
 
     def ecdh_encrypt_data(self, data):
+        AES = require_dependency("Crypto.Cipher.AES", "pycryptodome", "ECDH authentication", extra="ecc")
         cryptor = AES.new(bytearray.fromhex(self._ecdh_shared_key[0:32]), AES.MODE_CBC, bytearray(16))
         ciphertext = cryptor.encrypt(data)
         return ciphertext
 
     def ecdh_decrypt_data(self, data):
+        AES = require_dependency("Crypto.Cipher.AES", "pycryptodome", "ECDH authentication", extra="ecc")
         cryptor = AES.new(bytearray.fromhex(self._ecdh_shared_key[0:32]), AES.MODE_CBC, bytearray(16))
         plaintext = cryptor.decrypt(data)
         return plaintext

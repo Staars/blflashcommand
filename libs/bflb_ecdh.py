@@ -3,14 +3,15 @@
 # Decompiled from: Python 3.7.16 (default, Mar 30 2023, 01:25:49) 
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/bflb_ecdh.py
+from libs.bflb_optional import require_dependency
 import binascii
-from ecdsa import ECDH, NIST256p
 from libs.bflb_utils import *
 
 class BflbEcdh(object):
 
-    def __init__(self, curve=NIST256p):
-        self.ecdh = ECDH(curve)
+    def __init__(self, curve=None):
+        ecdsa = require_dependency("ecdsa", "ecdsa", "ECDH authentication")
+        self.ecdh = ecdsa.ECDH(curve or ecdsa.NIST256p)
         self.local_public_key = None
         self.sharedsecret = ''
 

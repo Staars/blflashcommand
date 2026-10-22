@@ -3,8 +3,8 @@
 # Decompiled from: Python 3.7.16 (default, Mar 30 2023, 01:25:49) 
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/base/bl808/img_create_do.py
-import os, sys, hashlib, binascii, codecs, ecdsa
-from CryptoPlus.Cipher import AES as AES_XTS
+from libs.bflb_optional import require_dependency
+import os, sys, hashlib, binascii, codecs
 from libs import bflb_utils
 from libs.bflb_utils import img_create_sha256_data, img_create_encrypt_data
 from libs.bflb_configobj import BFConfigParser
@@ -571,6 +571,7 @@ def reverse_iv(need_reverse_iv_bytearray):
 
 
 def img_create_encrypt_data_xts(data_bytearray, key_bytearray, iv_bytearray, encrypt):
+    AES_XTS = require_dependency("CryptoPlus.Cipher.AES", "pycryptoplus", "AES-XTS image encryption")
     counter = binascii.hexlify(iv_bytearray[4:16]).decode()
     data_unit_number = 0
     key = (
@@ -603,6 +604,7 @@ def img_create_encrypt_data_xts(data_bytearray, key_bytearray, iv_bytearray, enc
 
 
 def img_create_sign_data(data_bytearray, privatekey_file_uecc, publickey_file):
+    ecdsa = require_dependency("ecdsa", "ecdsa", "ECC image signing")
     sk = ecdsa.SigningKey.from_pem(open(privatekey_file_uecc).read())
     vk = ecdsa.VerifyingKey.from_pem(open(publickey_file).read())
     pk_data = vk.to_string()

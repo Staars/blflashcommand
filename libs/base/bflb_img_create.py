@@ -22,6 +22,9 @@ def factory_mode_set(file, value):
 
 
 def check_pt_file(file, addr):
+    if len(file) == 0:
+        bflb_utils.printf('pt check fail, no flash files configured')
+        return False
     if len(file) > 0:
         i = 0
         L = []

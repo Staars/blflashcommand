@@ -3,7 +3,8 @@
 # Decompiled from: Python 3.7.16 (default, Mar 30 2023, 01:25:49) 
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/bflb_interface_openocd.py
-import os, time, binascii, subprocess, threading, telnetlib, serial
+from libs.bflb_optional import require_dependency
+import os, time, binascii, subprocess, threading, serial
 from libs import bflb_utils
 from libs.bflb_utils import app_path
 openocd_path = os.path.join(app_path, 'utils/openocd', 'openocd.exe')
@@ -50,6 +51,7 @@ class ThreadOpenocdServer(threading.Thread):
 class BflbOpenocdPort(object):
 
     def __init__(self):
+        telnetlib = require_dependency("telnetlib", "telnetlib-313-and-up", "OpenOCD on Python 3.13+")
         self._speed = 5000
         self._rx_timeout = 10000
         self._openocd_shake_hand_addr = '20000000'

@@ -8,6 +8,29 @@ import os, sys, time, traceback, binascii
 from libs.base import bflb_img_loader
 from libs.bflb_utils import *
 from libs.bflb_eflash_loader import *
+from chip_profiles import CHIP_PROFILES
+
+
+def create_eflash_loader(chip_type, args, config, callback=None):
+    """Select the existing chip protocol and its default crystal in one place.
+
+    CLI profiles have already separated the requested identity from chip_type
+    and chip_name. Keep the other interface backends and fallback dispatch as
+    before, including the distinct BL702 and BL702L implementations.
+    """
+    profile = CHIP_PROFILES.get(chip_type)
+    config['param']['chip_xtal'] = profile.default_xtal if profile else 'auto'
+    loader_class = {
+        'bl602': BL602EflashLoader,
+        'bl702': BL702EflashLoader,
+        'bl702l': BL702LEflashLoader,
+        'bl808': BL808EflashLoader,
+        'bl606p': BL808EflashLoader,
+        'bl616': BL616EflashLoader,
+        'wb03': BL616EflashLoader,
+        'bl628': BL628EflashLoader,
+    }.get(chip_type, OtherEflashLoader)
+    return loader_class(chip_type, args, config, callback)
 
 class InterfaceEflashLoader(object):
 
@@ -115,83 +138,59 @@ class InterfaceEflashLoader(object):
         flash_burn_retry = 1
         clear_global()
         try:
-            try:
-                device = config['param']['comport_uart']
-                if interface.lower() == 'uart':
-                    speed = config['param']['speed_uart']
-                else:
-                    speed = config['param']['speed_jlink']
-                if not speed.isdigit():
-                    error = '{"ErrorCode":"FFFF","ErrorMsg":"BAUDRATE MUST BE DIGIT"}'
+            device = config['param']['comport_uart']
+            if interface.lower() == 'uart':
+                speed = config['param']['speed_uart']
+            else:
+                speed = config['param']['speed_jlink']
+            if not speed.isdigit():
+                error = '{"ErrorCode":"FFFF","ErrorMsg":"BAUDRATE MUST BE DIGIT"}'
+                printf(error)
+                return error
+            chip_type = config['param']['chip_type']
+            if act == 'download':
+                options = [
+                 '--write', '--flash']
+                try:
+                    if config['check_box']['efuse']:
+                        options.extend(['--efuse'])
+                except:
+                    pass
+
+                parser = eflash_loader_parser_init()
+                args = parser.parse_args(options)
+                start_time = time.time() * 1000
+                if 'Error' in chip_type:
+                    error = '{"ErrorCode":"FFFF","ErrorMsg":"BFLB CAN NOT GET CHIP TYPE"}'
                     printf(error)
                     return error
-                chip_type = config['param']['chip_type']
-                if act == 'download':
-                    options = [
-                     '--write', '--flash']
-                    try:
-                        if config['check_box']['efuse']:
-                            options.extend(['--efuse'])
-                    except:
-                        pass
-
-                    parser = eflash_loader_parser_init()
-                    args = parser.parse_args(options)
-                    start_time = time.time() * 1000
-                    if 'Error' in chip_type:
-                        error = '{"ErrorCode":"FFFF","ErrorMsg":"BFLB CAN NOT GET CHIP TYPE"}'
-                        printf(error)
-                        return error
-                    config['param']['chip_xtal'] = 'auto'
-                    if chip_type == 'bl602':
-                        config['param']['chip_xtal'] = '40m'
-                        temp_eflash_obj = BL602EflashLoader(chip_type, args, config, callback)
+                temp_eflash_obj = create_eflash_loader(chip_type, args, config, callback)
+                while flash_burn_retry:
+                    retry = -1
+                    if temp_eflash_obj.bflb_serial_object is not None:
+                        temp_eflash_obj.close_serial()
                     else:
-                        if chip_type == 'bl702':
-                            config['param']['chip_xtal'] = '32m'
-                            temp_eflash_obj = BL702EflashLoader(chip_type, args, config, callback)
-                        else:
-                            if chip_type == 'bl702l':
-                                config['param']['chip_xtal'] = '32m'
-                                temp_eflash_obj = BL702LEflashLoader(chip_type, args, config, callback)
-                            else:
-                                if chip_type == 'bl808' or chip_type == 'bl606p':
-                                    temp_eflash_obj = BL808EflashLoader(chip_type, args, config, callback)
-                                else:
-                                    if chip_type == 'bl616' or chip_type == 'wb03':
-                                        temp_eflash_obj = BL616EflashLoader(chip_type, args, config, callback)
-                                    else:
-                                        if chip_type == 'bl628':
-                                            temp_eflash_obj = BL628EflashLoader(chip_type, args, config, callback)
-                                        else:
-                                            temp_eflash_obj = OtherEflashLoader(chip_type, args, config, callback)
-                    while flash_burn_retry:
-                        retry = -1
-                        if temp_eflash_obj.bflb_serial_object is not None:
-                            temp_eflash_obj.close_serial()
-                        else:
-                            printf('Program Start')
-                            result, content = temp_eflash_obj.run_step()
-                            self._temp_task_num = temp_eflash_obj.task_num
-                            temp_result = self.judge_result(temp_eflash_obj, result, args, start_time)
-                            if temp_result:
-                                return True
-                            printf('Burn Retry')
-                            flash_burn_retry -= 1
+                        printf('Program Start')
+                        result, content = temp_eflash_obj.run_step()
+                        self._temp_task_num = temp_eflash_obj.task_num
+                        temp_result = self.judge_result(temp_eflash_obj, result, args, start_time)
+                        if temp_result:
+                            return True
+                        printf('Burn Retry')
+                        flash_burn_retry -= 1
 
-                    printf('Burn return with retry fail')
-                    local_log_save('log', temp_eflash_obj.input_macaddr)
-                    error = errorcode_msg(self._temp_task_num)
-            except Exception as e:
-                try:
-                    traceback.print_exc(limit=10, file=(sys.stdout))
-                    error = str(e)
-                finally:
-                    e = None
-                    del e
+                printf('Burn return with retry fail')
+                local_log_save('log', temp_eflash_obj.input_macaddr)
+                error = errorcode_msg(self._temp_task_num)
+        except Exception as e:
+            try:
+                traceback.print_exc(limit=10, file=(sys.stdout))
+                error = str(e)
+            finally:
+                e = None
+                del e
 
-        finally:
-            return error
+        return error
 
     def program_read_id(self, config, callback=None):
         flash_burn_retry = 1
@@ -214,29 +213,7 @@ class InterfaceEflashLoader(object):
             options = ['--none', '--flash', '-c', eflash_loader_cfg_tmp]
             parser_eflash = eflash_loader_parser_init()
             args = parser_eflash.parse_args(options)
-            config['param']['chip_xtal'] = 'auto'
-            if chip_type == 'bl602':
-                config['param']['chip_xtal'] = '40m'
-                temp_eflash_obj = BL602EflashLoader(chip_type, args, config, callback)
-            else:
-                if chip_type == 'bl702':
-                    config['param']['chip_xtal'] = '32m'
-                    temp_eflash_obj = BL702EflashLoader(chip_type, args, config, callback)
-                else:
-                    if chip_type == 'bl702l':
-                        config['param']['chip_xtal'] = '32m'
-                        temp_eflash_obj = BL702LEflashLoader(chip_type, args, config, callback)
-                    else:
-                        if chip_type == 'bl808' or chip_type == 'bl606p':
-                            temp_eflash_obj = BL808EflashLoader(chip_type, args, config, callback)
-                        else:
-                            if chip_type == 'bl616' or chip_type == 'wb03':
-                                temp_eflash_obj = BL616EflashLoader(chip_type, args, config, callback)
-                            else:
-                                if chip_type == 'bl628':
-                                    temp_eflash_obj = BL628EflashLoader(chip_type, args, config, callback)
-                                else:
-                                    temp_eflash_obj = OtherEflashLoader(chip_type, args, config, callback)
+            temp_eflash_obj = create_eflash_loader(chip_type, args, config, callback)
             result, content = temp_eflash_obj.run_step()
             ret, data = temp_eflash_obj.flash_read_jedec_id_process()
             temp_eflash_obj.object_status_clear()
@@ -277,29 +254,7 @@ class InterfaceEflashLoader(object):
             options = ['--none', '--flash', '-c', eflash_loader_cfg_tmp]
             parser_eflash = eflash_loader_parser_init()
             args = parser_eflash.parse_args(options)
-            config['param']['chip_xtal'] = 'auto'
-            if chip_type == 'bl602':
-                config['param']['chip_xtal'] = '40m'
-                temp_eflash_obj = BL602EflashLoader(chip_type, args, config, callback)
-            else:
-                if chip_type == 'bl702':
-                    config['param']['chip_xtal'] = '32m'
-                    temp_eflash_obj = BL702EflashLoader(chip_type, args, config, callback)
-                else:
-                    if chip_type == 'bl702l':
-                        config['param']['chip_xtal'] = '32m'
-                        temp_eflash_obj = BL702LEflashLoader(chip_type, args, config, callback)
-                    else:
-                        if chip_type == 'bl808' or chip_type == 'bl606p':
-                            temp_eflash_obj = BL808EflashLoader(chip_type, args, config, callback)
-                        else:
-                            if chip_type == 'bl616' or chip_type == 'wb03':
-                                temp_eflash_obj = BL616EflashLoader(chip_type, args, config, callback)
-                            else:
-                                if chip_type == 'bl628':
-                                    temp_eflash_obj = BL628EflashLoader(chip_type, args, config, callback)
-                                else:
-                                    temp_eflash_obj = OtherEflashLoader(chip_type, args, config, callback)
+            temp_eflash_obj = create_eflash_loader(chip_type, args, config, callback)
             result, content = temp_eflash_obj.run_step()
             temp_eflash_obj.object_status_clear()
             cmd = config['cmd']
@@ -365,29 +320,7 @@ class InterfaceEflashLoader(object):
             options = ['--none', '--flash', '-c', eflash_loader_cfg_tmp]
             parser_eflash = eflash_loader_parser_init()
             args = parser_eflash.parse_args(options)
-            config['param']['chip_xtal'] = 'auto'
-            if chip_type == 'bl602':
-                config['param']['chip_xtal'] = '40m'
-                temp_eflash_obj = BL602EflashLoader(chip_type, args, config, callback)
-            else:
-                if chip_type == 'bl702':
-                    config['param']['chip_xtal'] = '32m'
-                    temp_eflash_obj = BL702EflashLoader(chip_type, args, config, callback)
-                else:
-                    if chip_type == 'bl702l':
-                        config['param']['chip_xtal'] = '32m'
-                        temp_eflash_obj = BL702LEflashLoader(chip_type, args, config, callback)
-                    else:
-                        if chip_type == 'bl808' or chip_type == 'bl606p':
-                            temp_eflash_obj = BL808EflashLoader(chip_type, args, config, callback)
-                        else:
-                            if chip_type == 'bl616' or chip_type == 'wb03':
-                                temp_eflash_obj = BL616EflashLoader(chip_type, args, config, callback)
-                            else:
-                                if chip_type == 'bl628':
-                                    temp_eflash_obj = BL628EflashLoader(chip_type, args, config, callback)
-                                else:
-                                    temp_eflash_obj = OtherEflashLoader(chip_type, args, config, callback)
+            temp_eflash_obj = create_eflash_loader(chip_type, args, config, callback)
             result, content = temp_eflash_obj.run_step()
             temp_eflash_obj.object_status_clear()
             cmd = config['cmd']
@@ -476,29 +409,7 @@ class InterfaceEflashLoader(object):
                 options = ['--read', '--flash', '--start=' + start, '--end=' + end, '--file=flash.bin', '-c', eflash_loader_cfg_tmp]
                 parser_eflash = eflash_loader_parser_init()
                 args = parser_eflash.parse_args(options)
-                config['param']['chip_xtal'] = 'auto'
-                if chip_type == 'bl602':
-                    config['param']['chip_xtal'] = '40m'
-                    temp_eflash_obj = BL602EflashLoader(chip_type, args, config, callback)
-                else:
-                    if chip_type == 'bl702':
-                        config['param']['chip_xtal'] = '32m'
-                        temp_eflash_obj = BL702EflashLoader(chip_type, args, config, callback)
-                    else:
-                        if chip_type == 'bl702l':
-                            config['param']['chip_xtal'] = '32m'
-                            temp_eflash_obj = BL702LEflashLoader(chip_type, args, config, callback)
-                        else:
-                            if chip_type == 'bl808' or chip_type == 'bl606p':
-                                temp_eflash_obj = BL808EflashLoader(chip_type, args, config, callback)
-                            else:
-                                if chip_type == 'bl616' or chip_type == 'wb03':
-                                    temp_eflash_obj = BL616EflashLoader(chip_type, args, config, callback)
-                                else:
-                                    if chip_type == 'bl628':
-                                        temp_eflash_obj = BL628EflashLoader(chip_type, args, config, callback)
-                                    else:
-                                        temp_eflash_obj = OtherEflashLoader(chip_type, args, config, callback)
+                temp_eflash_obj = create_eflash_loader(chip_type, args, config, callback)
                 result, content = temp_eflash_obj.run_step()
                 temp_eflash_obj.object_status_clear()
                 self._temp_task_num = temp_eflash_obj.task_num
@@ -571,29 +482,7 @@ class InterfaceEflashLoader(object):
                      '--erase', '--flash', '--start=' + start, '--end=' + end, '-c', eflash_loader_cfg_tmp]
                 parser_eflash = eflash_loader_parser_init()
                 args = parser_eflash.parse_args(options)
-                config['param']['chip_xtal'] = 'auto'
-                if chip_type == 'bl602':
-                    config['param']['chip_xtal'] = '40m'
-                    temp_eflash_obj = BL602EflashLoader(chip_type, args, config, callback)
-                else:
-                    if chip_type == 'bl702':
-                        config['param']['chip_xtal'] = '32m'
-                        temp_eflash_obj = BL702EflashLoader(chip_type, args, config, callback)
-                    else:
-                        if chip_type == 'bl702l':
-                            config['param']['chip_xtal'] = '32m'
-                            temp_eflash_obj = BL702LEflashLoader(chip_type, args, config, callback)
-                        else:
-                            if chip_type == 'bl808' or chip_type == 'bl606p':
-                                temp_eflash_obj = BL808EflashLoader(chip_type, args, config, callback)
-                            else:
-                                if chip_type == 'bl616' or chip_type == 'wb03':
-                                    temp_eflash_obj = BL616EflashLoader(chip_type, args, config, callback)
-                                else:
-                                    if chip_type == 'bl628':
-                                        temp_eflash_obj = BL628EflashLoader(chip_type, args, config, callback)
-                                    else:
-                                        temp_eflash_obj = OtherEflashLoader(chip_type, args, config, callback)
+                temp_eflash_obj = create_eflash_loader(chip_type, args, config, callback)
                 result, content = temp_eflash_obj.run_step()
                 temp_eflash_obj.object_status_clear()
                 self._temp_task_num = temp_eflash_obj.task_num

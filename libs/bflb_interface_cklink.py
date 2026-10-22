@@ -3,7 +3,8 @@
 # Decompiled from: Python 3.7.16 (default, Mar 30 2023, 01:25:49) 
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/bflb_interface_cklink.py
-import os, time, binascii, subprocess, config as gol, cklink
+from libs.bflb_optional import require_dependency
+import os, time, binascii, subprocess, config as gol
 from libs import bflb_utils
 from libs.bflb_utils import app_path
 dir_dll = os.path.join(app_path, 'utils/cklink')
@@ -25,6 +26,7 @@ class BflbCKLinkPort(object):
         self.link = gol.obj_cklink
 
     def if_init(self, device, sn, rate, chiptype='bl808', chipname='bl808'):
+        cklink = require_dependency("cklink", "pycklink", "CKLink transport")
         if self._inited is False:
             dev = device.split('|')
             vid = int(dev[0].replace('0x', ''), 16)
@@ -50,6 +52,7 @@ class BflbCKLinkPort(object):
             return False
 
     def repeat_init(self, device, sn, rate, chiptype='bl808', chipname='bl808'):
+        cklink = require_dependency("cklink", "pycklink", "CKLink transport")
         if self._inited is False:
             dev = device.split('|')
             vid = int(dev[0].replace('0x', ''), 16)

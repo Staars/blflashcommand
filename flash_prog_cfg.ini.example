@@ -1,0 +1,44 @@
+# Copy this file to flash_prog_cfg.ini and adjust the path and address.
+# Pass it with --config flash_prog_cfg.ini and select the chip explicitly.
+# Relative image paths are resolved beside this config file.
+#
+# BL616 / BL618: use --chipname bl616 or --chipname bl618 (case-insensitive).
+# Both use the BL616 backend and chips/bl616 resources; no chips/bl618 tree
+# is needed. $(CHIPNAME) preserves the requested name, for example:
+# filedir = firmware_$(CHIPNAME).bin
+# becomes firmware_bl618.bin for BL618, or firmware_bl618_foo.bin with
+# --cpu_id foo. Choose the address from your board's actual image layout.
+#
+# BL702: use --chipname bl702. This retains the BL702 loader/resources and
+# 32 MHz default, and remains unqualified on hardware in this checkout.
+# BL618 flashing and boot behavior also await hardware qualification.
+#
+# BL602 app-only image (for example an OpenBeken application image):
+# [app]
+# filedir = /absolute/path/to/firmware.bin
+# address = 0x00010000
+#
+# A complete flash dump must instead be written at 0x0:
+# [flash]
+# filedir = /absolute/path/to/full_flash_dump.bin
+# address = 0x00000000
+#
+# Boot2 + partition + app layouts need one section per file, for example:
+# [boot2]
+# filedir = /absolute/path/to/boot2.bin
+# address = 0x00000000
+# [partition]
+# filedir = /absolute/path/to/partition.bin
+# address = 0x0000e000
+# [app]
+# filedir = /absolute/path/to/app.bin
+# address = 0x00010000
+
+[cfg]
+erase = 1
+skip_mode = 0x0, 0x0
+boot2_isp_mode = 0
+
+[app]
+filedir = /absolute/path/to/firmware.bin
+address = 0x00010000

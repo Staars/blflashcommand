@@ -3,7 +3,8 @@
 # Decompiled from: Python 3.7.16 (default, Mar 30 2023, 01:25:49) 
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/base/bl702/img_create_do.py
-import hashlib, binascii, ecdsa
+from libs.bflb_optional import require_dependency
+import hashlib, binascii
 from libs import bflb_utils
 from libs.bflb_utils import img_create_sha256_data, img_create_encrypt_data
 from libs.bflb_configobj import BFConfigParser
@@ -170,6 +171,7 @@ def img_create_update_segheader(segheader, segdatalen, segdatacrc):
 
 
 def img_create_sign_data(data_bytearray, privatekey_file_uecc, publickey_file):
+    ecdsa = require_dependency("ecdsa", "ecdsa", "ECC image signing")
     sk = ecdsa.SigningKey.from_pem(open(privatekey_file_uecc).read())
     vk = ecdsa.VerifyingKey.from_pem(open(publickey_file).read())
     pk_data = vk.to_string()

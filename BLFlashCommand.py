@@ -8,6 +8,7 @@ import os, re, sys, argparse, binascii, threading, configparser
 from libs import bflb_utils
 from libs.bflb_utils import get_serial_ports
 from libs.bflb_interface_eflash_loader import InterfaceEflashLoader
+from chip_profiles import resolve_chip
 
 def hex_to_dec(value):
     try:
@@ -35,15 +36,6 @@ class ThreadIot(threading.Thread):
 
 
 class MainClass:
-
-    def __init__(self):
-        self.dict_chip = {
-          'BL602': ('bl602', 'bl602'),
-          'BL702': ('bl702', 'bl702'),
-          'BL702L': ('bl702l', 'bl702l'),
-          'BL808': ('bl808', 'bl808'),
-          'BL606P': ('bl606p', 'bl808'),
-          'BL616': ('bl616', 'bl616')}
 
     def get_addr_from_partition_by_name(self, name, parition_file, index):
         try:
@@ -75,13 +67,14 @@ class MainClass:
         self.config['input_path'] = dict()
         self.config['param']['interface_type'] = args.interface
         self.config['param']['comport_uart'] = args.port
-        self.config['param']['chip'] = args.chipname.lower()
-        if args.chipname.upper() not in self.dict_chip:
-            bflb_utils.printf('Error: chipname ' + args.chipname + ' is error!')
-            return
-        chip = self.dict_chip[args.chipname.upper()]
-        self.config['param']['chip_name'] = chip[0]
-        self.config['param']['chip_type'] = chip[1]
+        try:
+            profile = resolve_chip(args.chipname)
+        except ValueError as error:
+            bflb_utils.printf('Error: ' + str(error))
+            return False
+        self.config['param']['chip'] = profile.requested_name
+        self.config['param']['chip_name'] = profile.resource_name
+        self.config['param']['chip_type'] = profile.backend
         if args.interface.lower() == 'uart':
             self.config['param']['speed_uart'] = str(args.baudrate)
             self.config['param']['speed_jlink'] = '1000'
@@ -97,17 +90,24 @@ class MainClass:
         else:
             self.config['check_box']['efuse'] = False
             self.config['input_path']['efuse'] = ''
-        self.config['input_path']['config'] = args.config
+        if not args.config:
+            bflb_utils.printf('Error: --config is required. Pass a flash_prog_cfg.ini with filedir/address entries.')
+            return
+        config_path = os.path.abspath(args.config)
+        if not os.path.isfile(config_path):
+            bflb_utils.printf('Error: Config File Not Found: ' + config_path)
+            return
+        self.config['input_path']['config'] = config_path
         try:
             try:
                 self.erase = 1
                 self.skip_mode = '0x0, 0x0'
                 self.boot2_isp_mode = 0
                 config = configparser.ConfigParser()
-                if not os.path.exists(os.path.abspath(args.config)):
-                    bflb_utils.printf('Error: Config File Not Found!')
-                    return
-                config.read((os.path.abspath(args.config)), encoding='utf-8')
+                config.read(config_path, encoding='utf-8')
+                if not any(item != 'cfg' for item in config.sections()):
+                    bflb_utils.printf('Error: Config must contain at least one image section with filedir/address entries.')
+                    return False
                 if config:
                     for item in config.sections():
                         if item == 'cfg':
@@ -117,6 +117,9 @@ class MainClass:
                         else:
                             filedir = config.get(item, 'filedir')
                             address = config.get(item, 'address')
+                            if not filedir.strip() or not address.strip():
+                                bflb_utils.printf('Error: ' + item + ' requires nonempty filedir/address entries.')
+                                return False
                             if not self.get_value_file(item, filedir, address, args.cpu_id):
                                 return False
 
@@ -124,6 +127,7 @@ class MainClass:
                 try:
                     config = None
                     print('ConfigParser Error: ' + str(e))
+                    return False
                 finally:
                     e = None
                     del e
@@ -159,9 +163,9 @@ class MainClass:
             config_dir = os.path.dirname(os.path.abspath(self.config['input_path']['config']))
             path = os.path.join(config_dir, path)
         if cpu_id:
-            path = path.replace('$(CHIPNAME)', self.config['param']['chip_name'] + '_' + cpu_id)
+            path = path.replace('$(CHIPNAME)', self.config['param']['chip'] + '_' + cpu_id)
         else:
-            path = path.replace('$(CHIPNAME)', self.config['param']['chip_name'])
+            path = path.replace('$(CHIPNAME)', self.config['param']['chip'])
         addr = str(addr)
         self.config[name] = {}
         self.config[name]['addr'] = addr
@@ -227,9 +231,9 @@ class MainClass:
         parser = argparse.ArgumentParser(description='flash-command')
         parser.add_argument('--interface', dest='interface', default='uart', help='interface to use')
         parser.add_argument('--port', dest='port', default=port, help='serial port to use')
-        parser.add_argument('--chipname', dest='chipname', default='BL602', help='chip name')
+        parser.add_argument('--chipname', dest='chipname', default='BL602', help='chip name: BL602, BL702, BL702L, BL808, BL606P, BL616 or BL618 (case-insensitive)')
         parser.add_argument('--baudrate', dest='baudrate', default=2000000, type=int, help='the speed at which to communicate')
-        parser.add_argument('--config', dest='config', default='', help='run config')
+        parser.add_argument('--config', dest='config', default='', help='flash config with filedir/address sections (required)')
         parser.add_argument('--cpu_id', dest='cpu_id', default='', help='cpu id')
         parser.add_argument('--efuse', dest='efuse', default='', help='efuse options')
         parser.add_argument('--key', dest='key', default='', help='aes key')
@@ -248,7 +252,12 @@ class MainClass:
         config = self.get_value(args)
         if config:
             self.obj = InterfaceEflashLoader()
-            self.obj.run('download', config, None)
+            result = self.obj.run('download', config, None)
+            if result is not True:
+                bflb_utils.printf('Flash failed: ' + str(result))
+                sys.exit(1)
+        else:
+            sys.exit(2)
 
 
 if __name__ == '__main__':

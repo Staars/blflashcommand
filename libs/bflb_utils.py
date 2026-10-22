@@ -1,3 +1,4 @@
+from libs.bflb_optional import require_dependency
 import os
 import sys
 import re
@@ -15,10 +16,7 @@ import traceback
 import platform
 import codecs
 from glob import glob
-import pylink
 from serial import Serial
-from Crypto.Util import Counter
-from Crypto.Cipher import AES
 try:
     from PySide2 import QtCore
     qt_sign = True
@@ -262,20 +260,24 @@ def img_create_sha256_data(data_bytearray):
     return hexstr_to_bytearray(hashfun.hexdigest())
 
 def img_create_encrypt_data(data_bytearray, key_bytearray, iv_bytearray, flash_img):
+    AES = require_dependency("Crypto.Cipher.AES", "pycryptodome", "AES image encryption")
     if flash_img == 0:
         cryptor = AES.new(key_bytearray, AES.MODE_CBC, iv_bytearray)
         ciphertext = cryptor.encrypt(data_bytearray)
     else:
+        Counter = require_dependency("Crypto.Util.Counter", "pycryptodome", "AES-CTR image encryption")
         iv = Counter.new(128, initial_value=int(binascii.hexlify(iv_bytearray), 16))
         cryptor = AES.new(key_bytearray, AES.MODE_CTR, counter=iv)
         ciphertext = cryptor.encrypt(data_bytearray)
     return ciphertext
 
 def aes_decrypt_data(data, key_bytearray, iv_bytearray, flash_img):
+    AES = require_dependency("Crypto.Cipher.AES", "pycryptodome", "AES data decryption")
     if flash_img == 0:
         cryptor = AES.new(key_bytearray, AES.MODE_CBC, iv_bytearray)
         plaintext = cryptor.decrypt(data)
     else:
+        Counter = require_dependency("Crypto.Util.Counter", "pycryptodome", "AES-CTR data decryption")
         iv = Counter.new(128, initial_value=int(binascii.hexlify(iv_bytearray), 16))
         cryptor = AES.new(key_bytearray, AES.MODE_CTR, counter=iv)
         plaintext = cryptor.decrypt(data)
@@ -386,6 +388,7 @@ def serial_enumerate():
 
 def pylink_enumerate():
     try:
+        pylink = require_dependency("pylink", "pylink-square", "J-Link enumeration")
         if sys.platform == 'win32':
             obj_dll = pylink.Library(dllpath=path_dll)
             obj = pylink.JLink(lib=obj_dll)

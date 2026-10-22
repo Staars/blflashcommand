@@ -3,7 +3,8 @@
 # Decompiled from: Python 3.7.16 (default, Mar 30 2023, 01:25:49) 
 # [GCC 12.2.1 20220924]
 # Embedded file name: libs/bflb_interface_jlink.py
-import re, os, sys, time, binascii, traceback, struct, subprocess, pylink
+from libs.bflb_optional import require_dependency
+import re, os, sys, time, binascii, traceback, struct, subprocess
 from libs import bflb_utils
 from libs.bflb_utils import app_path
 python_version = struct.calcsize('P') * 8
@@ -25,6 +26,7 @@ class BflbJLinkPort(object):
         self._jlink_run_addr = '22010000'
 
     def if_init(self, device, rate, chiptype='bl60x', chipname='bl60x'):
+        pylink = require_dependency("pylink", "pylink-square", "J-Link transport")
         if self._inited is False:
             sub_module = __import__(('libs.base.' + chiptype), fromlist=[chiptype])
             self._jlink_shake_hand_addr = sub_module.jlink_load_cfg.jlink_shake_hand_addr
@@ -54,6 +56,7 @@ class BflbJLinkPort(object):
             self._device = device
 
     def repeat_init(self, device, rate, chiptype='bl60x', chipname='bl60x'):
+        pylink = require_dependency("pylink", "pylink-square", "J-Link transport")
         if self._inited is False:
             sub_module = __import__(('libs.base.' + chiptype), fromlist=[chiptype])
             self._jlink_shake_hand_addr = sub_module.jlink_load_cfg.jlink_shake_hand_addr

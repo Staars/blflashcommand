@@ -1,0 +1,19 @@
+[project]
+name = "blflashcommand"
+version = "0.1.0"
+description = "Command-line Bouffalo Lab flash utility"
+requires-python = ">=3.9"
+dependencies = [
+    "pyserial==3.5",
+]
+
+[project.optional-dependencies]
+aes = ["pycryptodome>=3.20"]
+jlink = ["pylink-square==0.5.0"]
+cklink = ["pycklink==0.1.1"]
+ecc = ["ecdsa==0.18.0", "pycryptodome>=3.20"]
+xts = ["pycryptoplus==0.0.1"]
+openocd = ["telnetlib-313-and-up==3.13.1; python_version >= '3.13'"]
+
+[tool.uv]
+package = false

@@ -5,7 +5,6 @@ import hashlib
 import binascii
 import traceback
 import threading
-from Crypto.Cipher import AES
 from libs import bflb_utils
 from libs.base import bflb_img_create
 from libs.base import bflb_serial
