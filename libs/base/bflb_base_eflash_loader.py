@@ -1358,8 +1358,8 @@ class BaseEflashLoader(object):
         flash_data = fp.read()
         fp.close()
         flash_data_len = len(flash_data)
-        if flash_data_len > 2097152:
-            self.bflb_serial_object.set_timeout(2.0 * (flash_data_len / 2097152 + 1))
+        # The device hashes flash before it replies; BL618DG needs about 1.7 s per MiB.
+        self.bflb_serial_object.set_timeout(max(self._default_time_out, 2.0 + 3.0 * flash_data_len / 1048576))
         sh = hashlib.sha256()
         sh.update(flash_data)
         fw_sha256 = sh.hexdigest()
@@ -1368,10 +1368,8 @@ class BaseEflashLoader(object):
         del sh
         printf('xip mode Verify')
         ret, read_data = self.flash_xip_read_sha_main_process(start_addr, flash_data_len, 0, None, callback)
-        try:
+        if read_data is not None:
             printf('Sha caled by dev: ', binascii.hexlify(read_data).decode('utf-8'))
-        except:
-            printf('Sha caled by dev: ', binascii.hexlify(read_data))
 
         if ret is True and read_data == fw_sha256:
             printf('Verify success')
@@ -1395,7 +1393,8 @@ class BaseEflashLoader(object):
                 ret = False
             printf('sbus mode Verify')
             ret, read_data = self.flash_read_sha_main_process(start_addr, flash_data_len, 0, None, callback)
-            printf('Sha caled by dev: ', binascii.hexlify(read_data).decode('utf-8'))
+            if read_data is not None:
+                printf('Sha caled by dev: ', binascii.hexlify(read_data).decode('utf-8'))
             if ret is True and read_data == fw_sha256:
                 printf('Verify success')
             else:
@@ -1563,7 +1562,8 @@ class BaseEflashLoader(object):
             ret, data_read = self.com_process_one_cmd('flash_xip_readSha', cmd_id, data_send)
             if ret.startswith('OK'):
                 break
-            if try_cnt < self._checksum_err_retry_limit:
+            # An empty ack is a timeout: the device is still hashing, so resending would desync replies.
+            if ret != '' and try_cnt < self._checksum_err_retry_limit:
                 printf('Retry')
                 try_cnt += 1
             else:
@@ -1608,7 +1608,8 @@ class BaseEflashLoader(object):
             ret, data_read = self.com_process_one_cmd('flash_readSha', cmd_id, data_send)
             if ret.startswith('OK'):
                 break
-            if try_cnt < self._checksum_err_retry_limit:
+            # An empty ack is a timeout: the device is still hashing, so resending would desync replies.
+            if ret != '' and try_cnt < self._checksum_err_retry_limit:
                 printf('Retry')
                 try_cnt += 1
             else:
