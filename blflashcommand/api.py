@@ -125,7 +125,8 @@ def _request(operation, chip, port, baudrate, timeout, **fields):
 
 def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
                baudrate: Optional[int] = None, erase: bool = True, verify: bool = False,
-               reset_after: bool = False, timeout: float = 1800) -> FlashResult:
+               reset_after: bool = False, minimum_flash_bytes: Optional[int] = None,
+               timeout: float = 1800) -> FlashResult:
     """Flash nonempty, nonoverlapping images through the selected UART profile.
 
     erase=True erases programmed regions using the existing loader. False assumes
@@ -134,8 +135,14 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     the same loader session, before any requested reset. Input files stay unchanged.
     reset_after=True requests CPU reset in the same successful loader session
     and requires its acknowledgement; application boot is not verified.
+    minimum_flash_bytes requires at least that much JEDEC capacity before any
+    erase/write, in the same loader session used for writing and verification.
+    Images must fit the required span before serial access and the detected
+    capacity before writing. None omits this minimum-capacity check.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
     """
+    if minimum_flash_bytes is not None:
+        _integer(minimum_flash_bytes, 'minimum_flash_bytes', 1, 0x80000000)
     if not isinstance(erase, bool):
         raise ValueError('erase must be a boolean')
     if not isinstance(verify, bool):
@@ -153,6 +160,8 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
         end = address + path.stat().st_size
         if end > 0x100000000:
             raise ValueError('Image extends beyond the 32-bit flash address range')
+        if minimum_flash_bytes is not None and end > minimum_flash_bytes:
+            raise ValueError('Image extends beyond the required flash span')
         entries.append(dict(path=str(path), address=address, end=end))
     entries.sort(key=lambda entry: entry['address'])
     if not entries:
@@ -160,7 +169,8 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     if any(current['end'] > following['address'] for current, following in zip(entries, entries[1:])):
         raise ValueError('Flash image ranges overlap')
     result = _request('flash', chip, port, baudrate, timeout, images=entries,
-                      erase=erase, verify=verify, reset_after=reset_after)
+                      erase=erase, verify=verify, reset_after=reset_after,
+                      minimum_flash_bytes=minimum_flash_bytes)
     return FlashResult(result['log'])
 
 

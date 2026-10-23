@@ -82,6 +82,37 @@ def _probe_info(loader, chip, backend):
                 jedec_id=bytes(response[:3]).hex(), jedec_response=bytes(response).hex())
 
 
+def _guard_flash_capacity(loader, minimum_flash_bytes, config):
+    """Check step 4's JEDEC evidence immediately before step 5 can erase/write."""
+    write_step = loader.fifth_run_step_write_flash_and_check
+
+    def checked_write_step():
+        try:
+            jedec_id = bytes.fromhex(loader.read_flash_id)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise RuntimeError('Missing or invalid JEDEC evidence before flash write') from error
+        if len(jedec_id) != 3 or not 16 <= jedec_id[2] <= 31:
+            raise RuntimeError('Unsupported JEDEC capacity before flash write')
+        flash_bytes = 1 << jedec_id[2]
+        if flash_bytes < minimum_flash_bytes:
+            raise RuntimeError(
+                f'JEDEC reports {flash_bytes} bytes of flash, '
+                f'but {minimum_flash_bytes} bytes are required'
+            )
+        for image in config.values():
+            if not isinstance(image, dict) or 'addr' not in image or 'path' not in image:
+                continue
+            end = int(image['addr'], 16) + Path(image['path']).stat().st_size
+            if end > minimum_flash_bytes or end > flash_bytes:
+                raise RuntimeError('Image extends beyond required or detected flash bounds')
+        print(f'JEDEC capacity checked before write: {jedec_id.hex()} ({flash_bytes} bytes)')
+        return write_step()
+
+    # Keep the chip-specific run_step order, UART object and baud configuration.
+    # Its step 4 reads JEDEC; step 5 owns the first possible erase/write.
+    loader.fifth_run_step_write_flash_and_check = checked_write_step
+
+
 def _read_chunks(loader, address, length):
     """Bound calls to the inherited helper and reject incomplete responses."""
     maximum = loader._bflb_com_tx_size - 8
@@ -140,6 +171,8 @@ def _operation(request, workspace):
     args = eflash_loader_parser_init().parse_args(options)
     loader = create_eflash_loader(config['param']['chip_type'], args, config)
     try:
+        if operation == 'flash' and request.get('minimum_flash_bytes') is not None:
+            _guard_flash_capacity(loader, request['minimum_flash_bytes'], config)
         expected = _expected_images(config) if operation == 'flash' and request.get('verify', False) else []
         result, detail = loader.run_step()
         if result is not True:
