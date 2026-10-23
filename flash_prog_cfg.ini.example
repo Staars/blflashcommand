@@ -3,8 +3,10 @@
 # Relative image paths are resolved beside this config file.
 #
 # BL616 / BL618: use --chipname bl616 or --chipname bl618 (case-insensitive).
-# Both use the BL616 backend and chips/bl616 resources; no chips/bl618 tree
-# is needed. $(CHIPNAME) preserves the requested name, for example:
+# Both use the BL616 loader backend, but BL618 selects chips/bl618 resources
+# with the SDK-recommended 0x43 flash clock and one-cycle clock delay; BL616
+# keeps chips/bl616 with 0x41 and no extra delay. $(CHIPNAME) preserves the
+# requested name, for example:
 # filedir = firmware_$(CHIPNAME).bin
 # becomes firmware_bl618.bin for BL618, or firmware_bl618_foo.bin with
 # --cpu_id foo. Choose the address from your board's actual image layout.
@@ -12,6 +14,9 @@
 # BL702: use --chipname bl702. This retains the BL702 loader/resources and
 # 32 MHz default, and remains unqualified on hardware in this checkout.
 # BL618 flashing and boot behavior also await hardware qualification.
+#
+# This tool is a raw image writer. It does not assemble BL618 boot2/DTS or a
+# partition table. Supply a complete image at 0x0, or one section per component.
 #
 # BL602 app-only image (for example an OpenBeken application image):
 # [app]

@@ -1298,7 +1298,7 @@ class BaseEflashLoader(object):
             else:
                 self.error_code_print('003D')
                 return False
-            ret = bflb_flash_select.flash_bootheader_config_check(self.chip_name, read_flash_id, convert_path(binfile), flash_para_file)
+            ret = bflb_flash_select.flash_bootheader_config_check(self.chip_type, read_flash_id, convert_path(binfile), flash_para_file)
             if ret is False:
                 printf('flashcfg not match again')
                 self.error_code_print('0040')

@@ -27,6 +27,7 @@ def create_eflash_loader(chip_type, args, config, callback=None):
         'bl808': BL808EflashLoader,
         'bl606p': BL808EflashLoader,
         'bl616': BL616EflashLoader,
+        'bl618': BL616EflashLoader,
         'wb03': BL616EflashLoader,
         'bl628': BL628EflashLoader,
     }.get(chip_type, OtherEflashLoader)
@@ -87,6 +88,11 @@ class InterfaceEflashLoader(object):
                 return 'bl602'
             if '01000207' in bootinfo:
                 return 'bl702'
+            # Some BL618 boot ROMs report a distinct version marker. Units that
+            # report the BL616 marker cannot be distinguished here and must be
+            # selected explicitly with --chipname.
+            if '01001806' in bootinfo:
+                return 'bl618'
             if '01001606' in bootinfo:
                 return 'bl616'
             if '01000808' in bootinfo:

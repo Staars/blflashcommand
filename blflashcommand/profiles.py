@@ -19,7 +19,9 @@ CHIP_PROFILES = {
     'bl808': ChipProfile('bl808', 'bl808', 'bl808', 'auto'),
     'bl606p': ChipProfile('bl606p', 'bl606p', 'bl808', 'auto'),
     'bl616': ChipProfile('bl616', 'bl616', 'bl616', 'auto'),
-    'bl618': ChipProfile('bl618', 'bl616', 'bl616', 'auto'),
+    # BL618 shares the BL616 bootrom protocol/backend but needs its own
+    # SDK-recommended flash timing and resource configuration.
+    'bl618': ChipProfile('bl618', 'bl618', 'bl616', 'auto'),
 }
 
 

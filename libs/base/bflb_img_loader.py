@@ -610,18 +610,18 @@ class BflbImgLoader(object):
         else:
             return 'FL'
 
-    def _sync_without_reset(self, speed):
-        """Contact a prepared BL602 ROM/RAM loader without changing RTS/DTR."""
+    def _sync_without_reset(self, speed, wait=0.1, read_len=1000):
+        """Contact a prepared Bouffalo ROM/RAM loader without changing RTS/DTR."""
         uart = self.bflb_serial_object
         timeout = uart.get_timeout()
         try:
             bflb_utils.printf('Try sync without changing RTS/DTR')
-            uart.set_timeout(0.1)
+            uart.set_timeout(wait)
             uart.clear_buf()
             uart.write(self.get_sync_bytes(max(1, int(0.006 * speed / 10))))
-            _, ack = uart.read(1000)
+            _, ack = uart.read(read_len)
             bflb_utils.printf('ack is ', binascii.hexlify(ack))
-            if b'O' in ack or b'K' in ack:
+            if b'OK' in ack:
                 time.sleep(0.03)
                 return 'OK'
             return 'FL'
@@ -648,9 +648,18 @@ class BflbImgLoader(object):
                 self._602a0_dln_fix = False
             # A previous API/CLI operation may have left the helper running.
             # Resetting first destroys that session and may boot the application.
+            # BL616/BL618 are commonly connected through a generic USB-UART
+            # adapter whose RTS/DTR lines are not wired to the chip. Try the
+            # same non-resetting sync the web flasher uses before falling back
+            # to the legacy reset sequence.
             ret = 'FL'
-            if self._chip_type == 'bl602' and not isp_mode_sign:
-                ret = self._sync_without_reset(sh_baudrate)
+            if not isp_mode_sign and self._chip_type in ('bl602', 'bl616'):
+                if self._chip_type == 'bl616':
+                    ret = self._sync_without_reset(
+                        sh_baudrate, wait=1.0, read_len=2
+                    )
+                else:
+                    ret = self._sync_without_reset(sh_baudrate)
             if ret != 'OK':
                 ret = self.toggle_boot_or_shake_hand(2, do_reset, reset_hold_time, shake_hand_delay, reset_revert, cutoff_time, isp_mode_sign, isp_timeout, boot_load, shake_hand_retry)
             if self._chip_type == 'bl602':
