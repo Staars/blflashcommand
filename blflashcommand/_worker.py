@@ -56,6 +56,40 @@ def _config(request, workspace):
     return config
 
 
+def _stage_variants(request, workspace):
+    """Copy capacity variants beside their staged images; config keys map to options."""
+    from blflashcommand.profiles import resolve_chip
+
+    directory = workspace / 'chips' / resolve_chip(request['chip']).resource_name / 'variants'
+    variants = {}
+    for index, image in enumerate(request.get('images', [])):
+        options = []
+        for variant in image.get('variants', []):
+            directory.mkdir(parents=True, exist_ok=True)
+            target = directory / f'image_{index}_{variant["capacity"]}.bin'
+            shutil.copyfile(variant['path'], target)
+            options.append((variant['capacity'], target))
+        if options:
+            variants[f'image_{index}'] = options
+    return variants
+
+
+def _select_variants(config, variants, flash_bytes, expected):
+    """Stage the largest variant not above the detected capacity over its base copy."""
+    for key, options in variants.items():
+        fitting = [option for option in options if option[0] <= flash_bytes]
+        if not fitting:
+            continue
+        capacity, source = max(fitting)
+        image = config[key]
+        shutil.copyfile(source, image['path'])
+        address = int(image['addr'], 16)
+        print(f'Selected {capacity}-byte capacity variant for image at {address:#x}')
+        for index, (expected_address, length, _) in enumerate(expected):
+            if expected_address == address:
+                expected[index] = (address, length, hashlib.sha256(source.read_bytes()).digest())
+
+
 def _hex(value):
     if isinstance(value, str):
         return value
@@ -82,8 +116,11 @@ def _probe_info(loader, chip, backend):
                 jedec_id=bytes(response[:3]).hex(), jedec_response=bytes(response).hex())
 
 
-def _guard_flash_capacity(loader, minimum_flash_bytes, config):
-    """Check step 4's JEDEC evidence immediately before step 5 can erase/write."""
+def _guard_flash_capacity(loader, minimum_flash_bytes, config, variants=None, expected=None):
+    """Check step 4's JEDEC evidence immediately before step 5 can erase/write.
+
+    Capacity variants are selected here, so the same session that writes also measures.
+    """
     write_step = loader.fifth_run_step_write_flash_and_check
 
     def checked_write_step():
@@ -94,16 +131,17 @@ def _guard_flash_capacity(loader, minimum_flash_bytes, config):
         if len(jedec_id) != 3 or not 16 <= jedec_id[2] <= 31:
             raise RuntimeError('Unsupported JEDEC capacity before flash write')
         flash_bytes = 1 << jedec_id[2]
-        if flash_bytes < minimum_flash_bytes:
+        if minimum_flash_bytes is not None and flash_bytes < minimum_flash_bytes:
             raise RuntimeError(
                 f'JEDEC reports {flash_bytes} bytes of flash, '
                 f'but {minimum_flash_bytes} bytes are required'
             )
+        _select_variants(config, variants or {}, flash_bytes, expected if expected is not None else [])
         for image in config.values():
             if not isinstance(image, dict) or 'addr' not in image or 'path' not in image:
                 continue
             end = int(image['addr'], 16) + Path(image['path']).stat().st_size
-            if end > minimum_flash_bytes or end > flash_bytes:
+            if (minimum_flash_bytes is not None and end > minimum_flash_bytes) or end > flash_bytes:
                 raise RuntimeError('Image extends beyond required or detected flash bounds')
         print(f'JEDEC capacity checked before write: {jedec_id.hex()} ({flash_bytes} bytes)')
         return write_step()
@@ -171,9 +209,10 @@ def _operation(request, workspace):
     args = eflash_loader_parser_init().parse_args(options)
     loader = create_eflash_loader(config['param']['chip_type'], args, config)
     try:
-        if operation == 'flash' and request.get('minimum_flash_bytes') is not None:
-            _guard_flash_capacity(loader, request['minimum_flash_bytes'], config)
         expected = _expected_images(config) if operation == 'flash' and request.get('verify', False) else []
+        variants = _stage_variants(request, workspace) if operation == 'flash' else {}
+        if operation == 'flash' and (request.get('minimum_flash_bytes') is not None or variants):
+            _guard_flash_capacity(loader, request.get('minimum_flash_bytes'), config, variants, expected)
         result, detail = loader.run_step()
         if result is not True:
             raise RuntimeError(f'Loader initialization or operation failed: {detail}')

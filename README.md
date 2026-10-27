@@ -148,6 +148,14 @@ ranges, then optional reset. Incomplete or mismatched readback raises `FlashErro
 and prevents reset. Input files remain unchanged. Verification uses the requested
 image bytes, so backend image patching that changes those bytes causes a mismatch.
 
+`FlashImage(path, address, variants={capacity: path})` lets the write session choose
+an image by flash size, for example a partition table whose last entry reaches the
+end of a larger chip. Each variant has the image's length. After the loader reads
+JEDEC, and before the first erase or write in that same session, the variant with
+the largest capacity not above the detected capacity replaces the image; with none,
+the image itself is written. Verification compares the bytes actually written. An
+image without variants behaves exactly as before.
+
 `read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log, probe)`
 with raw `bytes`, using bounded reads and rejecting incomplete responses. Set
 `include_probe=True` to capture JEDEC/MAC/boot evidence in `result.probe` before

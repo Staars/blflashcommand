@@ -7,8 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
-from typing import Optional, Sequence, Union
+from dataclasses import dataclass, field
+from typing import Mapping, Optional, Sequence, Union
 
 from .profiles import resolve_chip
 
@@ -25,10 +25,16 @@ class FlashError(RuntimeError):
 
 @dataclass(frozen=True)
 class FlashImage:
-    """A source image and its byte offset in flash; source files stay unchanged."""
+    """A source image and its byte offset in flash; source files stay unchanged.
+
+    variants maps a flash capacity in bytes to an alternative file of the same length. The
+    write session writes the variant with the largest capacity not above the JEDEC capacity
+    it detects, or path when none qualifies.
+    """
 
     path: PathLike
     address: int
+    variants: Mapping[int, PathLike] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -137,6 +143,8 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     and requires its acknowledgement; application boot is not verified.
     minimum_flash_bytes requires at least that much JEDEC capacity before any
     erase/write, in the same loader session used for writing and verification.
+    FlashImage.variants are selected by that same JEDEC capacity, and verification
+    compares the variant actually written.
     Images must fit the required span before serial access and the detected
     capacity before writing. None omits this minimum-capacity check.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
@@ -162,7 +170,18 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
             raise ValueError('Image extends beyond the 32-bit flash address range')
         if minimum_flash_bytes is not None and end > minimum_flash_bytes:
             raise ValueError('Image extends beyond the required flash span')
-        entries.append(dict(path=str(path), address=address, end=end))
+        if not isinstance(image.variants, Mapping):
+            raise TypeError('variants must map flash capacities to image paths')
+        variants = []
+        for capacity, variant_path in sorted(image.variants.items()):
+            _integer(capacity, 'variant capacity', 1, 0x100000000)
+            if end > capacity:
+                raise ValueError('Image extends beyond its variant capacity')
+            variant = Path(variant_path).expanduser().resolve(strict=True)
+            if not variant.is_file() or variant.stat().st_size != path.stat().st_size:
+                raise ValueError(f'Variant must be a regular file of the image length: {variant}')
+            variants.append(dict(capacity=capacity, path=str(variant)))
+        entries.append(dict(path=str(path), address=address, end=end, variants=variants))
     entries.sort(key=lambda entry: entry['address'])
     if not entries:
         raise ValueError('At least one flash image is required')
