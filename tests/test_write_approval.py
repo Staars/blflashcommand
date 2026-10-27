@@ -94,6 +94,7 @@ probe = dict(chip='bl602', backend='bl602', boot_info='', mac_address='',
 (root / 'inspect.tmp').write_text(json.dumps(
     dict(probe=probe, ranges=[dict(address=57344, path='inspect_0.bin')])))
 (root / 'inspect.tmp').replace(root / 'inspect.json')
+print('@@blflashcommand-event ' + json.dumps(dict(event='approve')), flush=True)
 print('decision:', sys.stdin.readline().strip())
 '''
 
@@ -101,8 +102,8 @@ print('decision:', sys.stdin.readline().strip())
 class ParentApprovalTests(unittest.TestCase):
     def _run(self, approve):
         with tempfile.TemporaryDirectory() as directory:
-            return api._run_with_approval([sys.executable, '-c', CHILD], Path(directory),
-                                          None, 30, 'flash', approve)
+            return api._run_streaming([sys.executable, '-c', CHILD], Path(directory),
+                                      None, 30, 'flash', approve, None)
 
     def test_approval_receives_evidence_and_continues_the_worker(self):
         seen = []

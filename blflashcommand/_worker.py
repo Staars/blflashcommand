@@ -7,6 +7,16 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
+
+# One stdout line per event; the API separates these from the loader log.
+EVENT_PREFIX = '@@blflashcommand-event '
+
+
+def _emit(request, **event):
+    """Report one progress or state event when the caller asked for events."""
+    if request.get('events', False):
+        print(EVENT_PREFIX + json.dumps(event), flush=True)
 
 
 def _legacy_root():
@@ -129,6 +139,7 @@ def _await_approval(loader, request, config, root):
     staged = root / 'inspect.tmp'
     staged.write_text(json.dumps(dict(probe=evidence, ranges=ranges)), encoding='utf-8')
     staged.replace(root / 'inspect.json')
+    print(EVENT_PREFIX + json.dumps(dict(event='approve')), flush=True)
     if sys.stdin.readline().strip() != 'continue':
         raise RuntimeError('Write declined by the caller before the first erase')
 
@@ -172,11 +183,15 @@ def _guard_flash_capacity(loader, minimum_flash_bytes, config, variants=None, ex
     loader.fifth_run_step_write_flash_and_check = checked_write_step
 
 
-def _read_chunks(loader, address, length):
-    """Bound calls to the inherited helper and reject incomplete responses."""
+def _read_chunks(loader, address, length, report=None):
+    """Bound calls to the inherited helper and reject incomplete responses.
+
+    report(done, total) follows each chunk when given.
+    """
     maximum = loader._bflb_com_tx_size - 8
     if maximum <= 0:
         raise RuntimeError('Invalid loader read payload size')
+    total, done = length, 0
     while length:
         count = min(length, maximum)
         result, data = loader.flash_read_main_process(address, count)
@@ -185,6 +200,52 @@ def _read_chunks(loader, address, length):
         yield data
         address += count
         length -= count
+        done += count
+        if report is not None:
+            report(done, total)
+
+
+def _wait_for_handshake(request):
+    """Repeat a failed ROM handshake until wait_seconds elapse, reporting each retry."""
+    seconds = request.get('wait_seconds')
+    if not seconds:
+        return
+    from libs.base.bflb_img_loader import BflbImgLoader
+
+    handshake = BflbImgLoader.img_load_shake_hand
+
+    def waiting_handshake(self, *args, **kwargs):
+        deadline = time.monotonic() + seconds
+        _emit(request, event='connecting')
+        while True:
+            status = handshake(self, *args, **kwargs)
+            remaining = deadline - time.monotonic()
+            if status != 'shake hand fail' or remaining <= 0:
+                if status != 'shake hand fail':
+                    _emit(request, event='connected')
+                return status
+            _emit(request, event='waiting', remaining=max(1, round(remaining)))
+
+    BflbImgLoader.img_load_shake_hand = waiting_handshake
+
+
+def _report_writes(loader, request):
+    """Report per-chunk progress of each image the write step programs."""
+    load = loader.flash_load_main_process
+
+    def reporting_load(file, start_addr, callback=None):
+        address = start_addr & 0x7FFFFFFF
+
+        def progress(done, total, _kind):
+            _emit(request, event='write', address=address, done=done, total=total)
+
+        _emit(request, event='write', address=address, done=0, total=0)
+        result = load(file, start_addr, progress)
+        if result is not False:
+            _emit(request, event='written', address=address)
+        return result
+
+    loader.flash_load_main_process = reporting_load
 
 
 def _expected_images(config):
@@ -226,9 +287,12 @@ def _operation(request, workspace):
             return {}
         finally:
             image_loader.bflb_serial_object.close()
+    _wait_for_handshake(request)
     options = ['--write', '--flash'] if operation == 'flash' else ['--none', '--flash']
     args = eflash_loader_parser_init().parse_args(options)
     loader = create_eflash_loader(config['param']['chip_type'], args, config)
+    if request.get('events', False) and operation == 'flash':
+        _report_writes(loader, request)
     try:
         expected = _expected_images(config) if operation == 'flash' and request.get('verify', False) else []
         variants = _stage_variants(request, workspace) if operation == 'flash' else {}
@@ -246,7 +310,9 @@ def _operation(request, workspace):
         if operation == 'flash':
             for address, length, expected_digest in expected:
                 digest = hashlib.sha256()
-                for data in _read_chunks(loader, address, length):
+                for data in _read_chunks(loader, address, length, lambda done, total, address=address:
+                                         _emit(request, event='verify', address=address,
+                                               done=done, total=total)):
                     digest.update(data)
                 if digest.digest() != expected_digest:
                     raise RuntimeError(f'Flash readback differs from requested image at {address:#x}')
@@ -265,7 +331,9 @@ def _operation(request, workspace):
             if request.get('include_probe', False):
                 evidence['probe'] = _probe_info(loader, request['chip'], config['param']['chip_type'])
             with (workspace.parent / 'read.bin').open('wb') as output:
-                for data in _read_chunks(loader, request['address'], request['length']):
+                for data in _read_chunks(loader, request['address'], request['length'],
+                                         lambda done, total: _emit(request, event='read',
+                                                                   done=done, total=total)):
                     output.write(data)
             return evidence
         raise ValueError('Unknown operation: ' + operation)

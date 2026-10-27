@@ -164,6 +164,16 @@ the JEDEC check and before the first erase, `callback(probe, ranges)` receives t
 the write continue; raising declines it, nothing is erased, and the same exception
 reaches the caller. Without `approve`, the session runs exactly as before.
 
+`flash_uart`, `probe_uart` and `read_flash_uart` accept `on_event=callback` and
+`wait_seconds=N`. `callback(event)` receives dictionaries while the session runs:
+`connecting` before the first ROM handshake, `waiting` with `remaining` seconds after
+each failed handshake, `connected`, then `write` (`address`, `done`, `total` bytes;
+`done=0, total=0` when an image starts), `written` (`address`), `verify` and `read`
+(`done`, `total`). Event lines are removed from `log`. `wait_seconds` (up to 600)
+repeats a failed initial ROM handshake until that time has passed, so a user can
+enter download mode by hand; a first successful handshake is not delayed. Without
+either option, the session runs exactly as before.
+
 `read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log, probe)`
 with raw `bytes`, using bounded reads and rejecting incomplete responses. Set
 `include_probe=True` to capture JEDEC/MAC/boot evidence in `result.probe` before

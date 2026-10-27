@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
+import threading
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Sequence, Tuple, Union
 
@@ -90,45 +90,85 @@ def _inspection(root):
     return probe, ranges
 
 
-def _run_with_approval(command, root, env, timeout, operation, approve):
-    """Run the worker and answer its one pre-write inspection with approve()."""
-    deadline = time.monotonic() + timeout
-    log_path = root / 'log.txt'
+# Must match the worker's prefix; these stdout lines are events, not log text.
+EVENT_PREFIX = '@@blflashcommand-event '
+
+
+def _run_streaming(command, root, env, timeout, operation, approve, on_event):
+    """Run the worker, passing its events to on_event and answering its one approval."""
+    env = dict(env if env is not None else os.environ, PYTHONUNBUFFERED='1')
+    process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, encoding='utf-8', errors='replace', bufsize=1)
+    expired = threading.Event()
+
+    def expire():
+        expired.set()
+        process.kill()
+
+    timer = threading.Timer(timeout, expire)
+    timer.start()
+    log = []
     declined = None
-    with log_path.open('w', encoding='utf-8', errors='replace') as log_file:
-        process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
-                                   stdout=log_file, stderr=subprocess.STDOUT,
-                                   text=True, encoding='utf-8')
-        answered = False
-        try:
-            while process.poll() is None:
-                if time.monotonic() > deadline:
-                    process.kill()
-                    process.wait()
-                    raise FlashError(f'{operation} timed out after {timeout} seconds',
-                                     log_path.read_text(encoding='utf-8', errors='replace'))
-                if not answered and (root / 'inspect.json').exists():
-                    answered = True
+    try:
+        for line in process.stdout:
+            event = None
+            if line.startswith(EVENT_PREFIX):
+                try:
+                    event = json.loads(line[len(EVENT_PREFIX):])
+                except ValueError:
+                    event = None
+            if not isinstance(event, dict):
+                log.append(line)
+            elif event.get('event') == 'approve':
+                decision = 'abort'
+                if approve is not None:
                     try:
                         approve(*_inspection(root))
                         decision = 'continue'
                     except Exception as error:
                         declined = error
-                        decision = 'abort'
+                try:
                     process.stdin.write(decision + '\n')
                     process.stdin.flush()
-                time.sleep(0.05)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
+                except OSError:
+                    pass
+            elif on_event is not None:
+                on_event(event)
+        process.wait()
+    finally:
+        timer.cancel()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        try:
             process.stdin.close()
+        except OSError:
+            pass
+    text = ''.join(log)
     if declined is not None:
         raise declined
-    return process.returncode, log_path.read_text(encoding='utf-8', errors='replace')
+    if expired.is_set():
+        raise FlashError(f'{operation} timed out after {timeout} seconds', text)
+    return process.returncode, text
 
 
-def _request(operation, chip, port, baudrate, timeout, approve=None, **fields):
+def _streaming_fields(on_event, wait_seconds):
+    """Validate event/wait options and return their request fields."""
+    if on_event is not None and not callable(on_event):
+        raise TypeError('on_event must be callable')
+    fields = {}
+    if on_event is not None:
+        fields['events'] = True
+    if wait_seconds is not None:
+        if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, (int, float)) or \
+                not math.isfinite(wait_seconds) or not 0 < wait_seconds <= 600:
+            raise ValueError('wait_seconds must be a number of seconds in 0..600')
+        fields['wait_seconds'] = wait_seconds
+    return fields
+
+
+def _request(operation, chip, port, baudrate, timeout, approve=None, on_event=None, **fields):
     profile = resolve_chip(chip)
     if not isinstance(port, str) or not port.strip():
         raise ValueError('port must be a nonempty serial device name')
@@ -150,8 +190,9 @@ def _request(operation, chip, port, baudrate, timeout, approve=None, **fields):
         import_root = str(Path(__file__).resolve().parent.parent)
         env['PYTHONPATH'] = import_root + os.pathsep + env.get('PYTHONPATH', '')
         command = [sys.executable, '-m', 'blflashcommand._worker', str(request_file), str(result_file)]
-        if approve is not None:
-            returncode, log = _run_with_approval(command, root, env, timeout, operation, approve)
+        if approve is not None or on_event is not None:
+            returncode, log = _run_streaming(command, root, env, timeout, operation, approve,
+                                             on_event)
         else:
             try:
                 process = subprocess.run(
@@ -185,6 +226,8 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
                reset_after: bool = False, minimum_flash_bytes: Optional[int] = None,
                inspect: Sequence[Tuple[int, int]] = (),
                approve: Optional[Callable[['ProbeResult', Mapping[int, bytes]], None]] = None,
+               on_event: Optional[Callable[[dict], None]] = None,
+               wait_seconds: Optional[float] = None,
                timeout: float = 1800) -> FlashResult:
     """Flash nonempty, nonoverlapping images through the selected UART profile.
 
@@ -202,6 +245,8 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     the first erase, with the probe evidence and the bytes of each (address, length) in
     inspect. Raising from it declines the write: nothing is erased and the exception is
     re-raised to the caller. Without approve, the session runs as before.
+    on_event and wait_seconds are described in the module README; without them the
+    session runs as before.
     Images must fit the required span before serial access and the detected
     capacity before writing. None omits this minimum-capacity check.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
@@ -257,14 +302,19 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     if any(current['end'] > following['address'] for current, following in zip(entries, entries[1:])):
         raise ValueError('Flash image ranges overlap')
     fields = dict(images=entries, erase=erase, verify=verify, reset_after=reset_after,
-                  minimum_flash_bytes=minimum_flash_bytes)
+                  minimum_flash_bytes=minimum_flash_bytes,
+                  **_streaming_fields(on_event, wait_seconds))
     if approve is not None:
         fields.update(approve=approve, inspect=ranges)
+    if on_event is not None:
+        fields['on_event'] = on_event
     result = _request('flash', chip, port, baudrate, timeout, **fields)
     return FlashResult(result['log'])
 
 
 def probe_uart(*, chip: str, port: str, baudrate: Optional[int] = None,
+               on_event: Optional[Callable[[dict], None]] = None,
+               wait_seconds: Optional[float] = None,
                timeout: float = 120) -> ProbeResult:
     """Initialize the chosen profile and read ROM/MAC/JEDEC evidence.
 
@@ -272,12 +322,15 @@ def probe_uart(*, chip: str, port: str, baudrate: Optional[int] = None,
     It does not program flash or efuses and does not autodetect a chip profile.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
     """
-    result = _request('probe', chip, port, baudrate, timeout)
+    result = _request('probe', chip, port, baudrate, timeout, on_event=on_event,
+                      **_streaming_fields(on_event, wait_seconds))
     return ProbeResult(**{name: result[name] for name in ProbeResult.__dataclass_fields__})
 
 
 def read_flash_uart(address: int, length: int, *, chip: str, port: str,
                     baudrate: Optional[int] = None, include_probe: bool = False,
+                    on_event: Optional[Callable[[dict], None]] = None,
+                    wait_seconds: Optional[float] = None,
                     timeout: float = 600) -> ReadResult:
     """Read exactly length bytes from address using bounded transport chunks.
 
@@ -293,7 +346,8 @@ def read_flash_uart(address: int, length: int, *, chip: str, port: str,
     if address + length > 0x100000000:
         raise ValueError('Read extends beyond the 32-bit flash address range')
     result = _request('read', chip, port, baudrate, timeout, address=address,
-                      length=length, include_probe=include_probe)
+                      length=length, include_probe=include_probe, on_event=on_event,
+                      **_streaming_fields(on_event, wait_seconds))
     probe = ProbeResult(log=result['log'], **result['probe']) if include_probe else None
     return ReadResult(address, result['data'], result['log'], probe)
 
