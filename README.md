@@ -156,6 +156,14 @@ the largest capacity not above the detected capacity replaces the image; with no
 the image itself is written. Verification compares the bytes actually written. An
 image without variants behaves exactly as before.
 
+`flash_uart(..., inspect=[(address, length)], approve=callback)` lets the caller
+check the device inside the write session instead of a separate probe session, so
+a board whose loader does not survive a port reopen needs only one handshake. After
+the JEDEC check and before the first erase, `callback(probe, ranges)` receives the
+`ProbeResult` and a `{address: bytes}` map of the inspected ranges. Returning lets
+the write continue; raising declines it, nothing is erased, and the same exception
+reaches the caller. Without `approve`, the session runs exactly as before.
+
 `read_flash_uart(address, length, ...)` returns `ReadResult(address, data, log, probe)`
 with raw `bytes`, using bounded reads and rejecting incomplete responses. Set
 `include_probe=True` to capture JEDEC/MAC/boot evidence in `result.probe` before

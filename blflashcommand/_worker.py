@@ -116,10 +116,29 @@ def _probe_info(loader, chip, backend):
                 jedec_id=bytes(response[:3]).hex(), jedec_response=bytes(response).hex())
 
 
-def _guard_flash_capacity(loader, minimum_flash_bytes, config, variants=None, expected=None):
+def _await_approval(loader, request, config, root):
+    """Publish probe evidence and inspected ranges, then wait for the caller's decision."""
+    evidence = _probe_info(loader, request['chip'], config['param']['chip_type'])
+    ranges = []
+    for index, (address, length) in enumerate(request['inspect']):
+        name = f'inspect_{index}.bin'
+        with (root / name).open('wb') as output:
+            for data in _read_chunks(loader, address, length):
+                output.write(data)
+        ranges.append(dict(address=address, path=name))
+    staged = root / 'inspect.tmp'
+    staged.write_text(json.dumps(dict(probe=evidence, ranges=ranges)), encoding='utf-8')
+    staged.replace(root / 'inspect.json')
+    if sys.stdin.readline().strip() != 'continue':
+        raise RuntimeError('Write declined by the caller before the first erase')
+
+
+def _guard_flash_capacity(loader, minimum_flash_bytes, config, variants=None, expected=None,
+                          approval=None):
     """Check step 4's JEDEC evidence immediately before step 5 can erase/write.
 
-    Capacity variants are selected here, so the same session that writes also measures.
+    Capacity variants and the caller's approval run here, so the session that writes
+    also measures and inspects.
     """
     write_step = loader.fifth_run_step_write_flash_and_check
 
@@ -144,6 +163,8 @@ def _guard_flash_capacity(loader, minimum_flash_bytes, config, variants=None, ex
             if (minimum_flash_bytes is not None and end > minimum_flash_bytes) or end > flash_bytes:
                 raise RuntimeError('Image extends beyond required or detected flash bounds')
         print(f'JEDEC capacity checked before write: {jedec_id.hex()} ({flash_bytes} bytes)')
+        if approval is not None:
+            approval()
         return write_step()
 
     # Keep the chip-specific run_step order, UART object and baud configuration.
@@ -211,8 +232,14 @@ def _operation(request, workspace):
     try:
         expected = _expected_images(config) if operation == 'flash' and request.get('verify', False) else []
         variants = _stage_variants(request, workspace) if operation == 'flash' else {}
-        if operation == 'flash' and (request.get('minimum_flash_bytes') is not None or variants):
-            _guard_flash_capacity(loader, request.get('minimum_flash_bytes'), config, variants, expected)
+        approval = None
+        if operation == 'flash' and 'inspect' in request:
+            def approval():
+                _await_approval(loader, request, config, workspace.parent)
+        if operation == 'flash' and (request.get('minimum_flash_bytes') is not None or variants
+                                     or approval is not None):
+            _guard_flash_capacity(loader, request.get('minimum_flash_bytes'), config, variants,
+                                  expected, approval)
         result, detail = loader.run_step()
         if result is not True:
             raise RuntimeError(f'Loader initialization or operation failed: {detail}')

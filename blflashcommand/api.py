@@ -7,8 +7,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence, Union
+from typing import Callable, Mapping, Optional, Sequence, Tuple, Union
 
 from .profiles import resolve_chip
 
@@ -81,7 +82,53 @@ def _integer(value, name, minimum=0, maximum=0xffffffff):
     return value
 
 
-def _request(operation, chip, port, baudrate, timeout, **fields):
+def _inspection(root):
+    """Load the worker's pre-write evidence and inspected ranges."""
+    evidence = json.loads((root / 'inspect.json').read_text(encoding='utf-8'))
+    probe = ProbeResult(log='', **evidence['probe'])
+    ranges = {item['address']: (root / item['path']).read_bytes() for item in evidence['ranges']}
+    return probe, ranges
+
+
+def _run_with_approval(command, root, env, timeout, operation, approve):
+    """Run the worker and answer its one pre-write inspection with approve()."""
+    deadline = time.monotonic() + timeout
+    log_path = root / 'log.txt'
+    declined = None
+    with log_path.open('w', encoding='utf-8', errors='replace') as log_file:
+        process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
+                                   stdout=log_file, stderr=subprocess.STDOUT,
+                                   text=True, encoding='utf-8')
+        answered = False
+        try:
+            while process.poll() is None:
+                if time.monotonic() > deadline:
+                    process.kill()
+                    process.wait()
+                    raise FlashError(f'{operation} timed out after {timeout} seconds',
+                                     log_path.read_text(encoding='utf-8', errors='replace'))
+                if not answered and (root / 'inspect.json').exists():
+                    answered = True
+                    try:
+                        approve(*_inspection(root))
+                        decision = 'continue'
+                    except Exception as error:
+                        declined = error
+                        decision = 'abort'
+                    process.stdin.write(decision + '\n')
+                    process.stdin.flush()
+                time.sleep(0.05)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            process.stdin.close()
+    if declined is not None:
+        raise declined
+    return process.returncode, log_path.read_text(encoding='utf-8', errors='replace')
+
+
+def _request(operation, chip, port, baudrate, timeout, approve=None, **fields):
     profile = resolve_chip(chip)
     if not isinstance(port, str) or not port.strip():
         raise ValueError('port must be a nonempty serial device name')
@@ -102,23 +149,27 @@ def _request(operation, chip, port, baudrate, timeout, **fields):
         env['PYTHONDONTWRITEBYTECODE'] = '1'
         import_root = str(Path(__file__).resolve().parent.parent)
         env['PYTHONPATH'] = import_root + os.pathsep + env.get('PYTHONPATH', '')
-        try:
-            process = subprocess.run(
-                [sys.executable, '-m', 'blflashcommand._worker', str(request_file), str(result_file)],
-                cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding='utf-8', errors='replace', timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as error:
-            output = error.stdout or b''
-            if isinstance(output, bytes):
-                output = output.decode('utf-8', errors='replace')
-            raise FlashError(f'{operation} timed out after {timeout} seconds', output) from error
-        log = process.stdout
+        command = [sys.executable, '-m', 'blflashcommand._worker', str(request_file), str(result_file)]
+        if approve is not None:
+            returncode, log = _run_with_approval(command, root, env, timeout, operation, approve)
+        else:
+            try:
+                process = subprocess.run(
+                    command,
+                    cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding='utf-8', errors='replace', timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as error:
+                output = error.stdout or b''
+                if isinstance(output, bytes):
+                    output = output.decode('utf-8', errors='replace')
+                raise FlashError(f'{operation} timed out after {timeout} seconds', output) from error
+            returncode, log = process.returncode, process.stdout
         try:
             result = json.loads(result_file.read_text(encoding='utf-8'))
         except (OSError, ValueError) as error:
-            raise FlashError(f'{operation} worker failed (exit {process.returncode})', log) from error
-        if process.returncode or not result.get('ok'):
+            raise FlashError(f'{operation} worker failed (exit {returncode})', log) from error
+        if returncode or not result.get('ok'):
             raise FlashError(result.get('error', f'{operation} failed'), log)
         if operation == 'read':
             data = (root / 'read.bin').read_bytes()
@@ -132,6 +183,8 @@ def _request(operation, chip, port, baudrate, timeout, **fields):
 def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
                baudrate: Optional[int] = None, erase: bool = True, verify: bool = False,
                reset_after: bool = False, minimum_flash_bytes: Optional[int] = None,
+               inspect: Sequence[Tuple[int, int]] = (),
+               approve: Optional[Callable[['ProbeResult', Mapping[int, bytes]], None]] = None,
                timeout: float = 1800) -> FlashResult:
     """Flash nonempty, nonoverlapping images through the selected UART profile.
 
@@ -145,12 +198,28 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
     erase/write, in the same loader session used for writing and verification.
     FlashImage.variants are selected by that same JEDEC capacity, and verification
     compares the variant actually written.
+    approve, when given, is called once in that session after the JEDEC check and before
+    the first erase, with the probe evidence and the bytes of each (address, length) in
+    inspect. Raising from it declines the write: nothing is erased and the exception is
+    re-raised to the caller. Without approve, the session runs as before.
     Images must fit the required span before serial access and the detected
     capacity before writing. None omits this minimum-capacity check.
     baudrate=None selects 500000 for BL602 and 2000000 for other profiles.
     """
     if minimum_flash_bytes is not None:
         _integer(minimum_flash_bytes, 'minimum_flash_bytes', 1, 0x80000000)
+    if approve is not None and not callable(approve):
+        raise TypeError('approve must be callable')
+    if inspect and approve is None:
+        raise ValueError('inspect requires approve')
+    ranges = []
+    for item in inspect:
+        address, length = item
+        _integer(address, 'inspect address')
+        _integer(length, 'inspect length', 1, 0x100000)
+        if address + length > 0x100000000:
+            raise ValueError('Inspected range extends beyond the 32-bit flash address range')
+        ranges.append([address, length])
     if not isinstance(erase, bool):
         raise ValueError('erase must be a boolean')
     if not isinstance(verify, bool):
@@ -187,9 +256,11 @@ def flash_uart(images: Sequence[FlashImage], *, chip: str, port: str,
         raise ValueError('At least one flash image is required')
     if any(current['end'] > following['address'] for current, following in zip(entries, entries[1:])):
         raise ValueError('Flash image ranges overlap')
-    result = _request('flash', chip, port, baudrate, timeout, images=entries,
-                      erase=erase, verify=verify, reset_after=reset_after,
-                      minimum_flash_bytes=minimum_flash_bytes)
+    fields = dict(images=entries, erase=erase, verify=verify, reset_after=reset_after,
+                  minimum_flash_bytes=minimum_flash_bytes)
+    if approve is not None:
+        fields.update(approve=approve, inspect=ranges)
+    result = _request('flash', chip, port, baudrate, timeout, **fields)
     return FlashResult(result['log'])
 
 
